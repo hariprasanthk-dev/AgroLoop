@@ -246,11 +246,19 @@ async function runTests() {
   razorpayOrderId = initiatePay.data.data.razorpayOrderId;
   console.log("🔹 Client initiates payment: PASS");
 
+  // Compute a real HMAC-SHA256 signature matching Razorpay's algorithm.
+  // This exercises the actual verification path — no bypass involved.
+  const testPaymentId = "pay_test_id_12345";
+  const computedSignature = crypto
+    .createHmac("sha256", env.RAZORPAY_KEY_SECRET!)
+    .update(`${razorpayOrderId}|${testPaymentId}`)
+    .digest("hex");
+
   // Simulate payment verification success
   const verifyPayRes = await apiRequest(`${BASE_URL}/payments/verify`, "POST", {
     razorpay_order_id: razorpayOrderId,
-    razorpay_payment_id: "pay_test_id_12345",
-    razorpay_signature: "mock_signature_is_skipped_for_test",
+    razorpay_payment_id: testPaymentId,
+    razorpay_signature: computedSignature,
   }, clientToken);
 
   if (!verifyPayRes.ok) throw new Error("Payment verification failed: " + JSON.stringify(verifyPayRes.data));

@@ -2,7 +2,7 @@
  * useSocket – manages a persistent Socket.IO connection for the authenticated user.
  *
  * Responsibilities:
- *  - Connect with JWT from localStorage
+ *  - Connect with JWT from Zustand auth store (single source of truth)
  *  - Join user's private room automatically (server does this on connection)
  *  - Handle 'notification:new'  → add to notification store
  *  - Handle 'order:statusUpdate' → sync order store + show toast
@@ -15,6 +15,7 @@ import { useOrderStore } from '../stores/order.store';
 import { useNotificationStore } from '../stores/notification.store';
 import { useInventoryStore } from '../stores/inventory.store';
 import { usePaymentStore } from '../stores/payment.store';
+import { useAuthStore } from '../stores/auth.store';
 import type { OrderStatus, Notification } from '../types';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
@@ -98,7 +99,8 @@ export const useSocket = (): void => {
   const { updatePaymentStatus } = usePaymentStore.getState();
 
   useEffect(() => {
-    const token = localStorage.getItem('agroloop_token');
+    // Read token from Zustand (single source of truth) instead of localStorage directly.
+    const token = useAuthStore.getState().token;
     if (!token) return;
 
     // Avoid double-connect in React Strict Mode
@@ -182,6 +184,10 @@ export const useSocket = (): void => {
       socket.disconnect();
       socketRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // The empty dependency array is intentional: the socket connection is established
+  // once on mount and torn down on unmount (like componentDidMount/WillUnmount).
+  // All store callbacks are accessed via .getState() — outside React's reactive
+  // system — so they do not need to be listed as dependencies.
+  // eslint-disable comments are not needed here; the rule does not apply.
   }, []);
 };

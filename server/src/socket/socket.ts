@@ -3,14 +3,17 @@ import { Server as HttpServer } from "http";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 import { JwtPayload } from "../types";
+import { corsOriginCallback } from "../config/cors";
 
 let io: Server;
 
 export const initSocket = (httpServer: HttpServer): Server => {
   io = new Server(httpServer, {
     cors: {
-      origin: env.CLIENT_URL,
+      // Reuses the same allowlist logic as Express CORS — no duplicated config.
+      origin: corsOriginCallback,
       methods: ["GET", "POST"],
+      credentials: true,
     },
     pingTimeout: 60000,
   });

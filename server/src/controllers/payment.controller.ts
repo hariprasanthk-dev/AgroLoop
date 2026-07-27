@@ -25,10 +25,23 @@ export const verifyPayment = asyncHandler(
       razorpay_payment_id: string;
       razorpay_signature: string;
     };
+
+    // ── Input validation — all three fields are required non-empty strings ──
+    if (
+      typeof razorpay_order_id !== "string" || razorpay_order_id.trim() === "" ||
+      typeof razorpay_payment_id !== "string" || razorpay_payment_id.trim() === "" ||
+      typeof razorpay_signature !== "string" || razorpay_signature.trim() === ""
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing or invalid payment fields: razorpay_order_id, razorpay_payment_id, and razorpay_signature are required.",
+      });
+    }
+
     const result = await PaymentService.verifyPayment(
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature
+      razorpay_order_id.trim(),
+      razorpay_payment_id.trim(),
+      razorpay_signature.trim()
     );
     return ApiResponse.ok(res, "Payment verified successfully", result);
   }

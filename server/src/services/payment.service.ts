@@ -84,7 +84,7 @@ export const initiatePayment = async (
     amount: amountInPaise,
     currency: "INR",
     paymentDbId: payment._id.toString(),
-    key: env.RAZORPAY_KEY_ID!,
+    key: env.RAZORPAY_KEY_ID,
     orderDetails: {
       totalAmount: order.totalAmount,
       destination: order.destination,
@@ -102,21 +102,28 @@ export const verifyPayment = async (
   razorpayPaymentId: string,
   razorpaySignature: string
 ): Promise<{ payment: PaymentDocument; orderId: string }> => {
-  if (env.NODE_ENV !== "production" && razorpaySignature === "mock_signature_is_skipped_for_test") {
-    // Bypass verification in non-production environments for automated testing
-  } else {
-    if (!env.RAZORPAY_KEY_SECRET)
-      throw ApiError.internal("Razorpay credentials not configured");
+  // ── Always verify — no environment bypass ────────────────────────────────
+  if (!env.RAZORPAY_KEY_SECRET)
+    throw ApiError.internal("Razorpay credentials not configured");
 
-    // HMAC-SHA256 signature check
-    const expected = crypto
-      .createHmac("sha256", env.RAZORPAY_KEY_SECRET)
-      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
-      .digest("hex");
+  const secret: string = env.RAZORPAY_KEY_SECRET;
 
-    if (expected !== razorpaySignature)
-      throw ApiError.badRequest("Payment verification failed — invalid signature");
-  }
+  // HMAC-SHA256 signature check (Razorpay official algorithm)
+  const expectedSignature = crypto
+    .createHmac("sha256", secret)
+    .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+    .digest("hex");
+
+  // Use timing-safe comparison to prevent timing-based brute-force attacks
+  const expectedBuf = Buffer.from(expectedSignature, "hex");
+  const receivedBuf = Buffer.from(razorpaySignature, "hex");
+
+  const signaturesMatch =
+    expectedBuf.length === receivedBuf.length &&
+    crypto.timingSafeEqual(expectedBuf, receivedBuf);
+
+  if (!signaturesMatch)
+    throw ApiError.badRequest("Payment verification failed.");
 
   const payment = await Payment.findOneAndUpdate(
     { razorpayOrderId },

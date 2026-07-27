@@ -1,69 +1,83 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './layouts/ProtectedRoute';
 import DashboardLayout from './layouts/DashboardLayout';
+import LoadingSpinner from './components/common/LoadingSpinner';
+
+// ─── Lazy-loaded pages ────────────────────────────────────────────────────────
+// Each page bundle is only downloaded when the user first navigates to that route,
+// reducing the initial JS payload for all roles.
 
 // Auth
-import Login from './pages/auth/Login';
-import Register from './pages/auth/Register';
+const Login    = lazy(() => import('./pages/auth/Login'));
+const Register = lazy(() => import('./pages/auth/Register'));
 
 // Admin
-import AdminDashboard from './pages/admin/AdminDashboard';
-import AdminInventory from './pages/admin/AdminInventory';
-import AdminOrders from './pages/admin/AdminOrders';
-import AdminUsers from './pages/admin/AdminUsers';
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
+const AdminInventory = lazy(() => import('./pages/admin/AdminInventory'));
+const AdminOrders    = lazy(() => import('./pages/admin/AdminOrders'));
+const AdminUsers     = lazy(() => import('./pages/admin/AdminUsers'));
 
 // Client
-import ClientDashboard from './pages/client/ClientDashboard';
-import BrowseInventory from './pages/client/BrowseInventory';
-import ClientOrders from './pages/client/ClientOrders';
-import PaymentHistory from './pages/client/PaymentHistory';
+const ClientDashboard  = lazy(() => import('./pages/client/ClientDashboard'));
+const BrowseInventory  = lazy(() => import('./pages/client/BrowseInventory'));
+const ClientOrders     = lazy(() => import('./pages/client/ClientOrders'));
+const PaymentHistory   = lazy(() => import('./pages/client/PaymentHistory'));
 
 // Farmer
-import FarmerDashboard from './pages/farmer/FarmerDashboard';
-import FarmerInventory from './pages/farmer/FarmerInventory';
-import FarmerOrders from './pages/farmer/FarmerOrders';
+const FarmerDashboard  = lazy(() => import('./pages/farmer/FarmerDashboard'));
+const FarmerInventory  = lazy(() => import('./pages/farmer/FarmerInventory'));
+const FarmerOrders     = lazy(() => import('./pages/farmer/FarmerOrders'));
+
+// ─── Route-level Suspense fallback ───────────────────────────────────────────
+const PageFallback = (
+  <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+    <LoadingSpinner size="lg" />
+  </div>
+);
 
 const App: React.FC = () => (
   <BrowserRouter>
-    <Routes>
-      {/* Public */}
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/" element={<Navigate to="/login" replace />} />
+    <Suspense fallback={PageFallback}>
+      <Routes>
+        {/* Public */}
+        <Route path="/login"    element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/"         element={<Navigate to="/login" replace />} />
 
-      {/* Admin */}
-      <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
-        <Route element={<DashboardLayout />}>
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/admin/inventory" element={<AdminInventory />} />
-          <Route path="/admin/orders" element={<AdminOrders />} />
-          <Route path="/admin/users" element={<AdminUsers />} />
+        {/* Admin */}
+        <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
+          <Route element={<DashboardLayout />}>
+            <Route path="/admin"           element={<AdminDashboard />} />
+            <Route path="/admin/inventory" element={<AdminInventory />} />
+            <Route path="/admin/orders"    element={<AdminOrders />} />
+            <Route path="/admin/users"     element={<AdminUsers />} />
+          </Route>
         </Route>
-      </Route>
 
-      {/* Client */}
-      <Route element={<ProtectedRoute allowedRoles={['client']} />}>
-        <Route element={<DashboardLayout />}>
-          <Route path="/client" element={<ClientDashboard />} />
-          <Route path="/client/browse" element={<BrowseInventory />} />
-          <Route path="/client/orders" element={<ClientOrders />} />
-          <Route path="/client/payments" element={<PaymentHistory />} />
+        {/* Client */}
+        <Route element={<ProtectedRoute allowedRoles={['client']} />}>
+          <Route element={<DashboardLayout />}>
+            <Route path="/client"          element={<ClientDashboard />} />
+            <Route path="/client/browse"   element={<BrowseInventory />} />
+            <Route path="/client/orders"   element={<ClientOrders />} />
+            <Route path="/client/payments" element={<PaymentHistory />} />
+          </Route>
         </Route>
-      </Route>
 
-      {/* Farmer */}
-      <Route element={<ProtectedRoute allowedRoles={['farmer']} />}>
-        <Route element={<DashboardLayout />}>
-          <Route path="/farmer" element={<FarmerDashboard />} />
-          <Route path="/farmer/inventory" element={<FarmerInventory />} />
-          <Route path="/farmer/orders" element={<FarmerOrders />} />
+        {/* Farmer */}
+        <Route element={<ProtectedRoute allowedRoles={['farmer']} />}>
+          <Route element={<DashboardLayout />}>
+            <Route path="/farmer"           element={<FarmerDashboard />} />
+            <Route path="/farmer/inventory" element={<FarmerInventory />} />
+            <Route path="/farmer/orders"    element={<FarmerOrders />} />
+          </Route>
         </Route>
-      </Route>
 
-      {/* 404 fallback */}
-      <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
+        {/* 404 fallback */}
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </Suspense>
   </BrowserRouter>
 );
 

@@ -2,28 +2,16 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   Package, Search, CheckCircle2, XCircle, Truck,
   BoxIcon, Clock, TrendingUp, Users, Loader2,
-  ChevronDown, AlertCircle,
+  AlertCircle, ChevronDown,
 } from 'lucide-react';
 import { useOrderStore } from '../../stores/order.store';
 import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Modal from '../../components/common/Modal';
+import OrderActions from '../../components/orders/OrderActions';
+import FarmerStatCard from '../../components/orders/FarmerStatCard';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
 import type { Order, OrderStatus } from '../../types';
-
-// ─── Farmer's allowed next-status actions ──────────────────────────────────────
-const NEXT_STATUS: Record<string, OrderStatus | null> = {
-  accepted: 'packed',
-  packed:   'shipped',
-  shipped:  'delivered',
-  delivered: null,
-};
-
-const NEXT_STATUS_LABEL: Record<string, string> = {
-  accepted: '📦 Mark as Packed',
-  packed:   '🚚 Mark as Shipped',
-  shipped:  '✅ Mark as Delivered',
-};
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   pending:   <Clock className="w-4 h-4 text-amber-400" />,
@@ -34,74 +22,18 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   cancelled: <XCircle className="w-4 h-4 text-red-400" />,
 };
 
-// ─── Order Action Button ───────────────────────────────────────────────────────
-interface OrderActionsProps {
-  order: Order;
-  onAccept: (id: string) => void;
-  onReject: (id: string) => void;
-  onAdvance: (id: string, status: OrderStatus) => void;
-  busyId: string | null;
-}
-
-const OrderActions: React.FC<OrderActionsProps> = ({ order, onAccept, onReject, onAdvance, busyId }) => {
-  const isBusy = busyId === order._id;
-  const next = NEXT_STATUS[order.orderStatus];
-
-  if (order.orderStatus === 'pending') {
-    return (
-      <div className="flex gap-2">
-        <button
-          id={`accept-order-${order._id}`}
-          onClick={() => onAccept(order._id)}
-          disabled={isBusy}
-          className="btn-primary text-xs gap-1.5 flex-1 justify-center"
-        >
-          {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-          Accept
-        </button>
-        <button
-          id={`reject-order-${order._id}`}
-          onClick={() => onReject(order._id)}
-          disabled={isBusy}
-          className="btn-secondary text-xs gap-1.5 flex-1 justify-center text-red-400 hover:text-red-300 border-red-500/20 hover:bg-red-500/10"
-        >
-          {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
-          Reject
-        </button>
-      </div>
-    );
-  }
-
-  if (next) {
-    return (
-      <button
-        id={`advance-order-${order._id}`}
-        onClick={() => onAdvance(order._id, next)}
-        disabled={isBusy}
-        className="btn-primary text-xs gap-1.5 w-full justify-center"
-      >
-        {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        {NEXT_STATUS_LABEL[order.orderStatus]}
-      </button>
-    );
-  }
-
-  return null;
+// Local constants used by the detail modal's advance button
+const NEXT_STATUS: Record<string, OrderStatus | null> = {
+  accepted:  'packed',
+  packed:    'shipped',
+  shipped:   'delivered',
+  delivered: null,
 };
-
-// ─── Stat Card ─────────────────────────────────────────────────────────────────
-const FarmerStatCard: React.FC<{
-  label: string; value: string | number; icon: React.ReactNode;
-  colorClass: string; bgClass: string;
-}> = ({ label, value, icon, colorClass, bgClass }) => (
-  <div className={`glass-card p-4 border ${bgClass}`}>
-    <div className="flex items-center justify-between mb-2">
-      <p className="text-xs text-slate-500 font-medium">{label}</p>
-      <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${bgClass}`}>{icon}</div>
-    </div>
-    <p className={`text-2xl font-bold ${colorClass}`}>{value}</p>
-  </div>
-);
+const NEXT_STATUS_LABEL: Record<string, string> = {
+  accepted: '📦 Mark as Packed',
+  packed:   '🚚 Mark as Shipped',
+  shipped:  '✅ Mark as Delivered',
+};
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 const FarmerOrders: React.FC = () => {

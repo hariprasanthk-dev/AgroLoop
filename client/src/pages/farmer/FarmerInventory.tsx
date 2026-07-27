@@ -4,6 +4,7 @@ import { useInventoryStore } from '../../stores/inventory.store';
 import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
+import SummaryCard from '../../components/inventory/SummaryCard';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -23,28 +24,9 @@ const batchSchema = z.object({
 });
 type BatchForm = z.infer<typeof batchSchema>;
 
-// ─── Summary Card ─────────────────────────────────────────────────────────────
-const SummaryCard: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sub?: string;
-  color: string;
-}> = ({ icon, label, value, sub, color }) => (
-  <div className={`glass-card p-5 flex items-center gap-4 border ${color}`}>
-    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${color.replace('border-', 'bg-').replace('/30', '/10')}`}>
-      {icon}
-    </div>
-    <div>
-      <p className="text-xs text-slate-500 uppercase tracking-wider font-medium">{label}</p>
-      <p className="text-xl font-bold text-slate-100 mt-0.5">{value}</p>
-      {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
-    </div>
-  </div>
-);
-
 // ─── Main Component ───────────────────────────────────────────────────────────
 const FarmerInventory: React.FC = () => {
+
   const { batches, isLoading, error, fetchBatches, fetchStats, createBatch, updateBatch, deleteBatch } = useInventoryStore();
 
   const [addOpen, setAddOpen]       = useState(false);
