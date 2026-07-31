@@ -1,7 +1,7 @@
 # AgroLoop 🧅
 
 AgroLoop is a modern, premium web application designed to connect farmers directly with commercial clients. It optimizes the onion supply chain by offering inventory tracking, real-time status notifications, Razorpay-based payments, and a powerful Admin Dashboard featuring automatic AI-driven batch grading (Fresh, Sprouted, Rotten) and waste reduction analytics.
-
+            
 ---
 
 ## Technical Architecture

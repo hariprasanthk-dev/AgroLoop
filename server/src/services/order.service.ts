@@ -56,8 +56,9 @@ const FARMER_STATUS_PROGRESSION: Record<string, OrderStatus> = {
 
 /**
  * Client places a new order.
- * - Validates batch availability and sufficient stock
- * - Decrements stock immediately on placement
+ * - Atomically reserves stock using findOneAndUpdate (prevents race conditions)
+ * - Creates the order document after stock is successfully reserved
+ * - Compensates by restoring stock if Order.create() fails
  * - Notifies farmer via socket + DB notification
  */
 export const createOrder = async (
@@ -65,50 +66,104 @@ export const createOrder = async (
 ): Promise<OrderDocument> => {
   const { clientId, inventoryBatchId, quantityKg, destination, notes } = payload;
 
-  // Validate batch
-  const batch = await InventoryBatch.findById(inventoryBatchId);
-  if (!batch) throw ApiError.notFound("Inventory batch not found");
-  if (batch.status !== "available")
-    throw ApiError.badRequest("This batch is not available for ordering");
-  if (quantityKg > batch.quantityKg)
+  // ── Step 1: Atomically reserve stock ─────────────────────────────────────────
+  // A single findOneAndUpdate that checks conditions AND decrements stock in
+  // one server-side operation. MongoDB guarantees no two concurrent requests
+  // can both satisfy the filter when stock is insufficient for both.
+  //
+  // Filter conditions (all enforced atomically by MongoDB):
+  //   • _id matches the requested batch
+  //   • status === "available"
+  //   • quantityKg >= requested quantity  ← this is the race-condition guard
+  //
+  // $inc ensures the decrement is atomic; it never sets quantity below 0
+  // because the filter rejects any document where quantityKg < requested.
+  const updatedBatch = await InventoryBatch.findOneAndUpdate(
+    {
+      _id: new mongoose.Types.ObjectId(inventoryBatchId),
+      status: "available",
+      quantityKg: { $gte: quantityKg },
+    },
+    { $inc: { quantityKg: -quantityKg } },
+    { returnDocument: "after", runValidators: false }
+  );
+
+  if (!updatedBatch) {
+    // The atomic update found no matching document. Determine the precise reason
+    // by reading the original batch (a non-critical diagnostic read — no stock
+    // has been modified at this point).
+    const existingBatch = await InventoryBatch.findById(inventoryBatchId).lean();
+    if (!existingBatch) throw ApiError.notFound("Inventory batch not found");
+    if (existingBatch.status !== "available")
+      throw ApiError.badRequest("This batch is not available for ordering");
     throw ApiError.badRequest(
-      `Only ${batch.quantityKg} kg available in this batch`
+      `Only ${existingBatch.quantityKg} kg available in this batch`
     );
-
-  const totalAmount = quantityKg * batch.pricePerKg;
-
-  // Create the order
-  const order = await Order.create({
-    clientId,
-    inventoryBatchId,
-    quantityKg,
-    totalAmount,
-    destination,
-    notes,
-    orderStatus: "pending",
-  });
-
-  // ── Decrement stock immediately ──────────────────────────────────────────────
-  batch.quantityKg -= quantityKg;
-  if (batch.quantityKg <= 0) {
-    batch.quantityKg = 0;
-    batch.status = "reserved";
   }
-  await batch.save();
+
+  // ── Step 1b: Mark batch as "reserved" if stock just hit zero ─────────────────
+  // This second update is idempotent and purely cosmetic for business logic.
+  // Race-condition safety is already guaranteed by the $gte filter above —
+  // no further orders can pass through regardless of status, because 0 >= 1 fails.
+  let stockDepleted = false;
+  if (updatedBatch.quantityKg <= 0) {
+    stockDepleted = true;
+    updatedBatch.quantityKg = 0; // safety floor on the local document
+    await InventoryBatch.findOneAndUpdate(
+      { _id: updatedBatch._id },
+      { $set: { quantityKg: 0, status: "reserved" } },
+      { runValidators: false }
+    );
+    updatedBatch.status = "reserved";
+  }
+
+  const totalAmount = quantityKg * updatedBatch.pricePerKg;
+
+  // ── Step 2: Create the order document ────────────────────────────────────────
+  // Stock is already atomically reserved above. If Order.create() fails for any
+  // reason (validation error, DB outage, etc.), we compensate by restoring the
+  // decremented stock so inventory remains consistent.
+  let order: OrderDocument;
+  try {
+    order = await Order.create({
+      clientId,
+      inventoryBatchId,
+      quantityKg,
+      totalAmount,
+      destination,
+      notes,
+      orderStatus: "pending",
+    });
+  } catch (err) {
+    // Compensating update: restore the quantity that was just decremented.
+    // Also restore status back to "available" if the batch was marked reserved
+    // due to this order draining the stock.
+    await InventoryBatch.findOneAndUpdate(
+      { _id: new mongoose.Types.ObjectId(inventoryBatchId) },
+      {
+        $inc: { quantityKg: quantityKg },
+        ...(stockDepleted && { $set: { status: "available" } }),
+      },
+      { runValidators: false }
+    );
+    throw ApiError.internal(
+      "Order creation failed due to a server error. Please try again."
+    );
+  }
 
   // ── Notify farmer ────────────────────────────────────────────────────────────
-  const farmerRoom = `user:${batch.farmerId.toString()}`;
+  const farmerRoom = `user:${updatedBatch.farmerId.toString()}`;
   emit(farmerRoom, "notification:new", {
     title: "🛒 New Order Received",
-    message: `Order #${String(order._id).slice(-6)} — ${quantityKg} kg of ${batch.category} onions`,
+    message: `Order #${String(order._id).slice(-6)} — ${quantityKg} kg of ${updatedBatch.category} onions`,
     type: "order_placed",
     orderId: order._id,
   });
 
   await Notification.create({
-    userId: batch.farmerId,
+    userId: updatedBatch.farmerId,
     title: "New Order Received",
-    message: `A client placed an order for ${quantityKg} kg of your ${batch.category} onions.`,
+    message: `A client placed an order for ${quantityKg} kg of your ${updatedBatch.category} onions.`,
     type: "order_placed",
     relatedId: order._id,
   });

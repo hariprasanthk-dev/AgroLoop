@@ -229,6 +229,68 @@ async function runTests() {
   }
   console.log("🔹 Stock decremented immediately on placement: PASS");
 
+  // ─── RACE CONDITION TEST ───
+  // Verify the atomic findOneAndUpdate prevents overselling under concurrency.
+  // Create a new batch with exactly 10 kg, then fire two simultaneous order
+  // requests for 10 kg each. Only one should succeed; inventory must never go negative.
+  console.log("\n⚡ Running Race Condition / Concurrent Order Test...");
+
+  const raceBatch = await apiRequest(`${BASE_URL}/inventory`, "POST", {
+    category: "fresh",
+    quantityKg: 10,
+    pricePerKg: 50,
+    location: "Nashik, MH",
+    harvestDate: today,
+    description: "Race condition test batch (10 kg only)",
+  }, farmerToken);
+  if (!raceBatch.ok) throw new Error("Race batch creation failed: " + JSON.stringify(raceBatch.data));
+  const raceBatchId = raceBatch.data.data._id;
+  console.log(`🔹 Created race-condition test batch (10 kg) [ID: ...${String(raceBatchId).slice(-6)}]: PASS`);
+
+  // Fire two simultaneous requests — both attempt to claim all 10 kg
+  const [raceResult1, raceResult2] = await Promise.all([
+    apiRequest(`${BASE_URL}/orders`, "POST", {
+      inventoryBatchId: raceBatchId,
+      quantityKg: 10,
+      destination: "Race Test Warehouse A",
+    }, clientToken),
+    apiRequest(`${BASE_URL}/orders`, "POST", {
+      inventoryBatchId: raceBatchId,
+      quantityKg: 10,
+      destination: "Race Test Warehouse B",
+    }, clientToken),
+  ]);
+
+  const successes = [raceResult1, raceResult2].filter((r) => r.status === 201);
+  const failures  = [raceResult1, raceResult2].filter((r) => r.status === 400);
+
+  if (successes.length !== 1) {
+    throw new Error(
+      `Race condition detected! Expected exactly 1 success, got ${successes.length}. ` +
+      `Results: [${raceResult1.status}, ${raceResult2.status}]`
+    );
+  }
+  if (failures.length !== 1) {
+    throw new Error(
+      `Race condition detected! Expected exactly 1 failure (400), got ${failures.length}.`
+    );
+  }
+  console.log("🔹 Concurrent orders: exactly 1 succeeded, 1 rejected (400): PASS");
+
+  // Verify inventory is 0 — never negative
+  const raceBatchDoc = await InventoryBatch.findById(raceBatchId);
+  if (raceBatchDoc === null) throw new Error("Race batch document not found in DB");
+  if (raceBatchDoc.quantityKg !== 0) {
+    throw new Error(
+      `Inventory consistency error! Expected 0 kg remaining, got ${raceBatchDoc.quantityKg} kg`
+    );
+  }
+  if (raceBatchDoc.quantityKg < 0) {
+    throw new Error(`CRITICAL: Inventory went NEGATIVE (${raceBatchDoc.quantityKg} kg)!`);
+  }
+  console.log(`🔹 Inventory after race: ${raceBatchDoc.quantityKg} kg (never negative): PASS`);
+  console.log("✅ Race Condition Test: PASS\n");
+
   // Farmer accepts order
   const acceptOrd = await apiRequest(`${BASE_URL}/orders/${testOrderId}/accept`, "PUT", {}, farmerToken);
   if (!acceptOrd.ok) throw new Error("Farmer order accept failed");
