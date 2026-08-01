@@ -47,15 +47,31 @@ export const verifyPayment = asyncHandler(
   }
 );
 
-// ─── Client: Mark Payment Failed ─────────────────────────────────────────────
+// ─── Client: Mark Payment Failed ──────────────────────────────────────────────────
 export const handlePaymentFailed = asyncHandler(
   async (req: AuthenticatedRequest, res: Response) => {
     const { razorpay_order_id, error_description } = req.body as {
       razorpay_order_id: string;
       error_description?: string;
     };
+
+    // ── Input validation ───────────────────────────────────────────────
+    if (
+      typeof razorpay_order_id !== "string" ||
+      razorpay_order_id.trim() === ""
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing or invalid field: razorpay_order_id is required.",
+      });
+    }
+
+    // ── Ownership-aware service call ─────────────────────────────────────
+    const isAdmin = req.user!.role === "admin";
     const payment = await PaymentService.markPaymentFailed(
-      razorpay_order_id,
+      razorpay_order_id.trim(),
+      req.user!.id,
+      isAdmin,
       error_description
     );
     return ApiResponse.ok(res, "Payment failure recorded", payment);

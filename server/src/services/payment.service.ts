@@ -160,18 +160,47 @@ export const verifyPayment = async (
 };
 
 // ─── Handle Failed Payment ────────────────────────────────────────────────────
+/**
+ * Marks a payment as failed after verifying that the requesting user owns
+ * the underlying order.  Admins may mark any payment as failed.
+ *
+ * @throws ApiError.notFound   – payment record does not exist
+ * @throws ApiError.notFound   – linked order record does not exist
+ * @throws ApiError.forbidden  – authenticated user is not the order owner
+ */
 export const markPaymentFailed = async (
   razorpayOrderId: string,
+  clientId: string,
+  isAdmin: boolean,
   errorDescription?: string
 ): Promise<PaymentDocument> => {
+  // ── 1. Fetch the payment record first (no mutation yet) ───────────────────
+  const existingPayment = await Payment.findOne({ razorpayOrderId });
+  if (!existingPayment) throw ApiError.notFound("Payment record not found");
+
+  // ── 2. Load the associated order ─────────────────────────────────────────
+  const order = await Order.findById(existingPayment.orderId);
+  if (!order) throw ApiError.notFound("Associated order not found");
+
+  // ── 3. Ownership check — admins are always permitted ─────────────────────
+  if (!isAdmin && order.clientId.toString() !== clientId) {
+    throw ApiError.forbidden(
+      "You are not authorized to mark this payment as failed"
+    );
+  }
+
+  // ── 4. Authorised — now apply the status change ───────────────────────────
   const payment = await Payment.findOneAndUpdate(
     { razorpayOrderId },
     { status: "failed" },
     { new: true }
-  );
-  if (!payment) throw ApiError.notFound("Payment record not found");
+  ) as PaymentDocument;
 
-  console.warn(`⚠️ Payment failed for Razorpay Order ${razorpayOrderId}: ${errorDescription ?? "unknown error"}`);
+  console.warn(
+    `⚠️ Payment failed for Razorpay Order ${razorpayOrderId} ` +
+    `(clientId: ${clientId}, isAdmin: ${isAdmin}): ${errorDescription ?? "unknown error"}`
+  );
+
   return payment;
 };
 
