@@ -8,6 +8,7 @@ import { ApiError } from "../utils/ApiError";
 import { env } from "../config/env";
 import { getIO } from "../socket/socket";
 import { PaginationMeta } from "../types";
+import { logger } from "../config/logger";
 
 // ─── Razorpay instance (lazy) ─────────────────────────────────────────────────
 const getRazorpay = (): Razorpay => {
@@ -196,9 +197,9 @@ export const markPaymentFailed = async (
     { new: true }
   ) as PaymentDocument;
 
-  console.warn(
-    `⚠️ Payment failed for Razorpay Order ${razorpayOrderId} ` +
-    `(clientId: ${clientId}, isAdmin: ${isAdmin}): ${errorDescription ?? "unknown error"}`
+  logger.warn(
+    { razorpayOrderId, clientId, isAdmin },
+    `⚠️ Payment failed: ${errorDescription ?? "unknown error"}`
   );
 
   return payment;

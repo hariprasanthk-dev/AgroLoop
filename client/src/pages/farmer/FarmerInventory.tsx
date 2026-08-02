@@ -5,6 +5,7 @@ import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import SummaryCard from '../../components/inventory/SummaryCard';
+import ImageUploader from '../../components/inventory/ImageUploader';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -20,7 +21,7 @@ const batchSchema = z.object({
   harvestDate: z.string().optional(),
   status:      z.enum(['available', 'reserved', 'sold', 'expired']).optional(),
   description: z.string().optional(),
-  imageUrl:    z.string().url('Must be a valid URL').optional().or(z.literal('')),
+  imageUrl:    z.string().optional(),
 });
 type BatchForm = z.infer<typeof batchSchema>;
 
@@ -194,12 +195,11 @@ const FarmerInventory: React.FC = () => {
           <textarea {...register('description')} rows={2} className="input-field resize-none" placeholder="Quality details, storage info…" />
         </div>
 
-        {/* Image URL */}
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">Image URL (optional)</label>
-          <input {...register('imageUrl')} className="input-field" placeholder="https://…" />
-          {errors.imageUrl && <p className="text-red-400 text-xs mt-1">{errors.imageUrl.message}</p>}
-        </div>
+        {/* Image Upload */}
+        <ImageUploader
+          value={form.watch('imageUrl')}
+          onChange={(url) => form.setValue('imageUrl', url, { shouldValidate: true, shouldDirty: true })}
+        />
       </div>
     );
   };

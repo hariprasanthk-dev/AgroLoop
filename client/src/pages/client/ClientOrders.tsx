@@ -11,7 +11,8 @@ import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Modal from '../../components/common/Modal';
 import OrderProgress from '../../components/orders/OrderProgress';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
-import type { Order, OrderStatus } from '../../types';
+import { loadRazorpaySdk } from '../../utils/razorpay';
+import type { Order, OrderStatus, RazorpayOptions } from '../../types';
 
 // ─── Status icon map (used in order card header) ──────────────────────────────
 const STATUS_ICONS: Record<string, React.ReactNode> = {
@@ -37,16 +38,19 @@ const ClientOrders: React.FC = () => {
   const handlePay = async (order: Order) => {
     setPayingId(order._id);
     try {
+      // Load SDK on-demand — no-op if already loaded
+      await loadRazorpaySdk();
+
       const initData = await initiatePayment(order._id);
       
-      const options = {
+      const options: RazorpayOptions = {
         key: initData.key,
         amount: initData.amount,
         currency: initData.currency,
         name: 'AgroLoop',
         description: `Order #${order._id.slice(-6)}`,
         order_id: initData.razorpayOrderId,
-        handler: async (response: any) => {
+        handler: async (response) => {
           try {
             await verifyPayment({
               razorpay_order_id: response.razorpay_order_id,
@@ -54,7 +58,7 @@ const ClientOrders: React.FC = () => {
               razorpay_signature: response.razorpay_signature,
             });
             fetchOrders({ orderStatus: filterStatus || undefined, limit: 50 });
-          } catch (err: any) {
+          } catch (err) {
             console.error('Payment verification failed:', err);
           } finally {
             setPayingId(null);
@@ -75,8 +79,8 @@ const ClientOrders: React.FC = () => {
         },
       };
 
-      const rz = new (window as any).Razorpay(options);
-      rz.on('payment.failed', (resp: any) => {
+      const rz = new window.Razorpay!(options);
+      rz.on('payment.failed', (resp) => {
         recordFailure(initData.razorpayOrderId, resp.error.description);
         setPayingId(null);
       });

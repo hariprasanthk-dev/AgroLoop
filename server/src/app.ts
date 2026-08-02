@@ -1,9 +1,12 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
+import pinoHttp from "pino-http";
+import * as Sentry from "@sentry/node";
+import { setupExpressErrorHandler } from "@sentry/node";
 import { env } from "./config/env";
 import { corsOptions } from "./config/cors";
+import { logger } from "./config/logger";
 import {
   authLimiter,
   apiLimiter,
@@ -22,6 +25,7 @@ import orderRoutes from "./routes/order.routes";
 import paymentRoutes from "./routes/payment.routes";
 import notificationRoutes from "./routes/notification.routes";
 import adminRoutes from "./routes/admin.routes";
+import uploadRoutes from "./routes/upload.routes";
 
 // Middleware
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
@@ -47,9 +51,28 @@ app.use(express.urlencoded({ extended: true }));
 app.use(noSqlSanitizer);
 app.use(xssSanitizer);
 
-// ─── Request Logging ──────────────────────────────────────────────────────────
+// ─── Request Logging (pino-http) ──────────────────────────────────────────────
+// Replaces morgan with structured JSON logging.
+// Silent in test environment to keep test output clean.
 if (env.NODE_ENV !== "test") {
-  app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
+  app.use(
+    pinoHttp({
+      logger,
+      // Use 'warn' for 4xx, 'error' for 5xx, 'info' for everything else
+      customLogLevel: (_req, res, err) => {
+        if (err || res.statusCode >= 500) return "error";
+        if (res.statusCode >= 400) return "warn";
+        return "info";
+      },
+      // Keep response time in ms as a structured field
+      customSuccessMessage: (req, res) =>
+        `${req.method} ${req.url} ${res.statusCode}`,
+      customErrorMessage: (req, res, err) =>
+        `${req.method} ${req.url} ${res.statusCode} — ${err.message}`,
+      // Redact Authorization header from access logs
+      redact: ["req.headers.authorization", "req.headers.cookie"],
+    })
+  );
 }
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
@@ -77,9 +100,18 @@ app.use(`${API_PREFIX}/inventory`, apiLimiter, inventoryRoutes);
 app.use(`${API_PREFIX}/orders`, apiLimiter, orderRoutes);
 app.use(`${API_PREFIX}/notifications`, apiLimiter, notificationRoutes);
 app.use(`${API_PREFIX}/admin`, apiLimiter, adminRoutes);
+app.use(`${API_PREFIX}/upload`, apiLimiter, uploadRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use(notFoundHandler);
+
+// ─── Sentry: Error Handler (Sentry v9) ────────────────────────────────────────
+// Must be registered BEFORE the global errorHandler.
+// setupExpressErrorHandler attaches an error-handling middleware that
+// captures exceptions and sends them to Sentry before forwarding to next().
+if (env.SENTRY_DSN) {
+  setupExpressErrorHandler(app);
+}
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use(errorHandler);

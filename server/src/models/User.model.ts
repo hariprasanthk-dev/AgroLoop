@@ -34,12 +34,40 @@ const UserSchema = new Schema<UserDocument>(
       enum: ["farmer", "client", "admin"] as UserRole[],
       default: "client",
     },
+
+    // ─── Email verification ──────────────────────────────────────────────────
+    isEmailVerified: {
+      type: Boolean,
+      default: true,
+    },
+    // SHA-256 hash of the raw token sent in the verification email link.
+    // Never store raw tokens in the database.
+    emailVerificationToken: {
+      type: String,
+      select: false,
+    },
+    emailVerificationExpires: {
+      type: Date,
+      select: false,
+    },
+
+    // ─── Password reset ──────────────────────────────────────────────────────
+    // SHA-256 hash of the raw token sent in the reset email link.
+    passwordResetToken: {
+      type: String,
+      select: false,
+    },
+    passwordResetExpires: {
+      type: Date,
+      select: false,
+    },
   },
   {
     timestamps: true,
     versionKey: false,
   }
 );
+
 
 // ─── Hash password before saving ─────────────────────────────────────────────
 UserSchema.pre<UserDocument>("save", async function () {

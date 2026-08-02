@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { InventoryBatch, InventoryStat, Pagination } from '../types';
 import { inventoryApi } from '../api/inventory.api';
+import { extractMessage } from '../utils/helpers';
 
 interface InventoryState {
   batches: InventoryBatch[];
@@ -17,9 +18,6 @@ interface InventoryState {
   deleteBatch: (id: string) => Promise<void>;
   clearError: () => void;
 }
-
-const extractMessage = (err: unknown) =>
-  (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Something went wrong';
 
 export const useInventoryStore = create<InventoryState>((set, get) => ({
   batches: [],

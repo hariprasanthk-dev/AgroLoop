@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 import { JwtPayload } from "../types";
 import { corsOriginCallback } from "../config/cors";
+import { logger } from "../config/logger";
 
 let io: Server;
 
@@ -41,7 +42,10 @@ export const initSocket = (httpServer: HttpServer): Server => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const user = (socket as any).user as JwtPayload;
 
-    console.log(`🔌 Socket connected: ${socket.id} | User: ${user?.id} | Role: ${user?.role}`);
+    logger.info(
+      { socketId: socket.id, userId: user?.id, role: user?.role },
+      "🔌 Socket connected"
+    );
 
     // Join user's private room for targeted notifications
     if (user?.id) {
@@ -54,7 +58,10 @@ export const initSocket = (httpServer: HttpServer): Server => {
     // ─── Client Events ───────────────────────────────────────────────────────
     socket.on("join:order", (orderId: string) => {
       socket.join(`order:${orderId}`);
-      console.log(`📦 Socket ${socket.id} joined order room: ${orderId}`);
+      logger.debug(
+        { socketId: socket.id, orderId },
+        "📦 Socket joined order room"
+      );
     });
 
     socket.on("leave:order", (orderId: string) => {
@@ -62,15 +69,21 @@ export const initSocket = (httpServer: HttpServer): Server => {
     });
 
     socket.on("disconnect", (reason) => {
-      console.log(`🔌 Socket disconnected: ${socket.id} | Reason: ${reason}`);
+      logger.info(
+        { socketId: socket.id, reason },
+        "🔌 Socket disconnected"
+      );
     });
 
     socket.on("error", (error) => {
-      console.error(`Socket error for ${socket.id}:`, error);
+      logger.error(
+        { socketId: socket.id, err: error },
+        "Socket error"
+      );
     });
   });
 
-  console.log("✅ Socket.IO initialized");
+  logger.info("✅ Socket.IO initialized");
   return io;
 };
 

@@ -60,8 +60,21 @@ const Login: React.FC = () => {
           <p className="text-slate-400 text-sm mb-6">Sign in to your account</p>
 
           {error && (
-            <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm animate-fade-in">
-              {error}
+            <div className={`mb-4 px-4 py-3 rounded-xl text-sm animate-fade-in border ${
+              error.includes('not verified')
+                ? 'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                : 'bg-red-500/10 border-red-500/20 text-red-400'
+            }`}>
+              {error.includes('not verified') ? (
+                <>
+                  <p className="font-medium mb-1">📧 Email not verified</p>
+                  <p className="text-xs leading-relaxed">
+                    Check your inbox for the verification link. If you can't find it,{' '}
+                    <Link to="/login" className="underline font-medium">sign in</Link>{' '}
+                    and use the dashboard to resend it.
+                  </p>
+                </>
+              ) : error}
             </div>
           )}
 
@@ -83,10 +96,17 @@ const Login: React.FC = () => {
               {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email.message}</p>}
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                Password
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Password
+                </label>
+                <Link
+                  to="/forgot-password"
+                  className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                 <input
@@ -98,7 +118,6 @@ const Login: React.FC = () => {
                 />
               </div>
               {errors.password && <p className="text-red-400 text-xs mt-1">{errors.password.message}</p>}
-            </div>
 
             <button
               type="submit"

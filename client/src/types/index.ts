@@ -6,6 +6,7 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
+  isEmailVerified: boolean;
   createdAt: string;
 }
 
@@ -152,4 +153,38 @@ export interface AdminDashboardStats {
     revenue: number;
     count: number;
   }>;
+}
+
+// ─── Razorpay (third-party, no @types package) ────────────────────────────────
+export interface RazorpayOptions {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description?: string;
+  order_id: string;
+  handler: (response: {
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }) => void | Promise<void>;
+  modal?: { ondismiss?: () => void };
+  prefill?: { name?: string; email?: string; contact?: string };
+  theme?: { color?: string };
+}
+
+export interface RazorpayInstance {
+  on(event: 'payment.failed', handler: (response: { error: { description: string } }) => void): void;
+  open(): void;
+}
+
+export interface RazorpayConstructor {
+  new (options: RazorpayOptions): RazorpayInstance;
+}
+
+// Augments the browser Window global so `window.Razorpay` is typed everywhere.
+declare global {
+  interface Window {
+    Razorpay?: RazorpayConstructor;
+  }
 }

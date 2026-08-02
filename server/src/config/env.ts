@@ -14,7 +14,24 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string().min(1, "RAZORPAY_KEY_ID is required"),
   RAZORPAY_KEY_SECRET: z.string().min(1, "RAZORPAY_KEY_SECRET is required"),
   CLIENT_URL: z.string().default("http://localhost:5173"),
+  // ── Observability (optional) ──────────────────────────────────────────────
+  SENTRY_DSN: z.string().optional(),
+  // ── Email / SMTP (optional — email features disabled when absent) ─────────
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.string().default("587"),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default("AgroLoop <noreply@agroloop.app>"),
+  // URL of the frontend — used to build links in emails.
+  // Defaults to the first origin in CLIENT_URL.
+  CLIENT_RESET_URL: z.string().optional(),
+  // ── Cloudinary (optional — image uploads fail gracefully when absent) ──────
+  CLOUDINARY_CLOUD_NAME: z.string().optional(),
+  CLOUDINARY_API_KEY: z.string().optional(),
+  CLOUDINARY_API_SECRET: z.string().optional(),
 });
+
+
 
 const parsedEnv = envSchema.safeParse(process.env);
 

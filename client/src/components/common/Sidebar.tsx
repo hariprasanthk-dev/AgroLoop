@@ -2,13 +2,18 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Package, ShoppingCart, Users,
-  LogOut, Leaf, BarChart3, CreditCard,
+  LogOut, Leaf, BarChart3, CreditCard, X,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth.store';
 import { getInitials } from '../../utils/helpers';
 import type { UserRole } from '../../types';
 
 interface NavItem { to: string; icon: React.ReactNode; label: string; }
+
+interface SidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
 
 const adminNav: NavItem[] = [
   { to: '/admin',           icon: <LayoutDashboard className="w-4 h-4" />, label: 'Dashboard'  },
@@ -29,15 +34,19 @@ const farmerNav: NavItem[] = [
 ];
 const navMap: Record<UserRole, NavItem[]> = { admin: adminNav, client: clientNav, farmer: farmerNav };
 
-const Sidebar: React.FC = () => {
+const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const navItems = user ? (navMap[user.role] ?? []) : [];
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-64 glass-card rounded-none border-r border-slate-700/50 flex flex-col z-40">
-      {/* Logo */}
-      <div className="px-6 py-6 border-b border-slate-700/50">
+    <aside
+      className={`fixed left-0 top-0 h-full w-64 glass-card rounded-none border-r border-slate-700/50 flex flex-col z-40 transition-transform duration-300 ease-in-out ${
+        isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      }`}
+    >
+      {/* Logo & Close Button */}
+      <div className="px-6 py-6 border-b border-slate-700/50 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/30">
             <span className="text-lg">🧅</span>
@@ -47,6 +56,15 @@ const Sidebar: React.FC = () => {
             <p className="text-[10px] text-slate-500 capitalize">{user?.role} Portal</p>
           </div>
         </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 lg:hidden"
+            aria-label="Close sidebar"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
@@ -56,6 +74,7 @@ const Sidebar: React.FC = () => {
             key={item.to}
             to={item.to}
             end={item.to.split('/').length === 2}
+            onClick={() => onClose?.()}
             className={({ isActive }) => `sidebar-item ${isActive ? 'active' : ''}`}
           >
             {item.icon}
@@ -76,7 +95,11 @@ const Sidebar: React.FC = () => {
           </div>
         </div>
         <button
-          onClick={() => { logout(); navigate('/login'); }}
+          onClick={() => {
+            onClose?.();
+            logout();
+            navigate('/login');
+          }}
           className="sidebar-item w-full text-red-400 hover:text-red-300 hover:bg-red-500/10"
         >
           <LogOut className="w-4 h-4" />

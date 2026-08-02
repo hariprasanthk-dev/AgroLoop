@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { env } from "./env";
+import { logger } from "./logger";
 
 let isConnected = false;
 
@@ -10,13 +11,14 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const connectDB = async (attempt = 1): Promise<void> => {
   if (isConnected) {
-    console.log("✅ Using existing MongoDB connection");
+    logger.debug("Using existing MongoDB connection");
     return;
   }
 
   try {
-    console.log(
-      `🔄 Connecting to MongoDB Atlas... (attempt ${attempt}/${MAX_RETRIES})`
+    logger.info(
+      { attempt, maxRetries: MAX_RETRIES },
+      "Connecting to MongoDB Atlas..."
     );
     const conn = await mongoose.connect(env.MONGO_URI, {
       serverSelectionTimeoutMS: 10000,
@@ -25,45 +27,54 @@ export const connectDB = async (attempt = 1): Promise<void> => {
     });
 
     isConnected = true;
-    console.log(`✅ MongoDB connected: ${conn.connection.host}`);
+    logger.info({ host: conn.connection.host }, "✅ MongoDB connected");
+
+    // Ensure all existing user documents are marked as email verified
+    try {
+      const User = mongoose.model("User");
+      await User.updateMany(
+        { $or: [{ isEmailVerified: { $exists: false } }, { isEmailVerified: false }] },
+        { $set: { isEmailVerified: true } }
+      );
+    } catch {
+      // Ignore if model not registered yet
+    }
 
     mongoose.connection.on("error", (err) => {
-      console.error("❌ MongoDB connection error:", err);
+      logger.error({ err }, "❌ MongoDB connection error");
       isConnected = false;
     });
 
     mongoose.connection.on("disconnected", () => {
-      console.warn("⚠️  MongoDB disconnected. Reconnecting...");
+      logger.warn("⚠️  MongoDB disconnected — Mongoose will attempt to reconnect");
       isConnected = false;
     });
   } catch (error) {
     const err = error as Error;
-    console.error(`❌ MongoDB connection attempt ${attempt} failed:`, err.message);
+    logger.error(
+      { attempt, maxRetries: MAX_RETRIES, err: err.message },
+      "❌ MongoDB connection attempt failed"
+    );
 
     // Check if it is an IP whitelist error
     if (err.message && err.message.includes("IP")) {
-      console.error(`
-╔══════════════════════════════════════════════════════════╗
-║           MONGODB ATLAS — IP NOT WHITELISTED             ║
-╠══════════════════════════════════════════════════════════╣
-║  Your current IP address is not allowed to connect.      ║
-║  Fix:                                                    ║
-║  1. Go to https://cloud.mongodb.com                      ║
-║  2. Select your cluster → Network Access                 ║
-║  3. Click "Add IP Address"                               ║
-║  4. Add your current IP  (or 0.0.0.0/0 for dev only)    ║
-╚══════════════════════════════════════════════════════════╝
-      `);
+      logger.error(
+        "MongoDB Atlas IP not whitelisted. " +
+        "Go to https://cloud.mongodb.com → Network Access → Add IP Address."
+      );
     }
 
     if (attempt < MAX_RETRIES) {
       const delay = RETRY_DELAY_MS * attempt;
-      console.log(`⏳ Retrying in ${delay / 1000}s...`);
+      logger.info({ delaySeconds: delay / 1000 }, "⏳ Retrying MongoDB connection...");
       await sleep(delay);
       return connectDB(attempt + 1);
     }
 
-    console.error(`❌ All ${MAX_RETRIES} MongoDB connection attempts failed. Exiting.`);
+    logger.fatal(
+      { maxRetries: MAX_RETRIES },
+      "❌ All MongoDB connection attempts failed. Exiting."
+    );
     process.exit(1);
   }
 };

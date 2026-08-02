@@ -1,16 +1,24 @@
 import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
+import * as Sentry from "@sentry/node";
 import { ApiError } from "../utils/ApiError";
 import { ApiResponseShape } from "../types";
 import { env } from "../config/env";
+import { logger } from "../config/logger";
 
 /**
  * Global error handler middleware.
  * Must be registered LAST in the Express middleware chain.
+ *
+ * Responsibilities:
+ *  - Normalise Mongoose errors into ApiError instances
+ *  - Report 5xx errors to Sentry (if configured)
+ *  - Log every error with structured context via Pino
+ *  - Return a consistent JSON error shape to the client
  */
 export const errorHandler = (
   err: Error,
-  _req: Request,
+  req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: NextFunction
@@ -40,6 +48,28 @@ export const errorHandler = (
   const apiError =
     error instanceof ApiError ? error : new ApiError(500, "Internal server error", [], false);
 
+  // ─── Sentry: capture unexpected 5xx errors ─────────────────────────────────
+  if (apiError.statusCode >= 500) {
+    Sentry.setExtra("method", req.method);
+    Sentry.setExtra("url", req.originalUrl);
+    Sentry.setExtra("statusCode", apiError.statusCode);
+    Sentry.captureException(apiError);
+  }
+
+  // ─── Structured Pino log ──────────────────────────────────────────────────
+  const logPayload = {
+    statusCode: apiError.statusCode,
+    method: req.method,
+    url: req.originalUrl,
+    err: apiError,
+  };
+
+  if (apiError.statusCode >= 500) {
+    logger.error(logPayload, apiError.message);
+  } else if (apiError.statusCode >= 400) {
+    logger.warn(logPayload, apiError.message);
+  }
+
   const responseBody: ApiResponseShape = {
     success: false,
     message: apiError.message,
@@ -48,8 +78,6 @@ export const errorHandler = (
       stack: apiError.stack,
     }),
   };
-
-  console.error(`[${new Date().toISOString()}] ERROR ${apiError.statusCode}:`, apiError.message);
 
   res.status(apiError.statusCode).json(responseBody);
 };

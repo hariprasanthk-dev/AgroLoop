@@ -27,7 +27,7 @@ export const createInventoryValidator = [
     .isISO8601().withMessage("Intake date must be a valid date"),
 
   body("imageUrl")
-    .optional()
+    .optional({ checkFalsy: true })
     .isURL().withMessage("Image URL must be a valid URL"),
 
   body("description")
@@ -63,7 +63,7 @@ export const updateInventoryValidator = [
     .isISO8601().withMessage("Harvest date must be a valid date"),
 
   body("imageUrl")
-    .optional()
+    .optional({ checkFalsy: true })
     .isURL().withMessage("Image URL must be a valid URL"),
 
   body("description")

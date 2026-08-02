@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Payment, Pagination, PaymentStatus } from '../types';
 import { paymentApi } from '../api/payment.api';
+import { extractMessage } from '../utils/helpers';
 
 interface PaymentStat {
   byStatus: { _id: string; count: number; totalAmount: number }[];
@@ -36,10 +37,6 @@ interface PaymentState {
   updatePaymentStatus: (orderId: string, status: PaymentStatus) => void;
   clearError: () => void;
 }
-
-const extractMessage = (err: unknown): string =>
-  (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-  ?? 'Something went wrong';
 
 export const usePaymentStore = create<PaymentState>((set) => ({
   payments: [],

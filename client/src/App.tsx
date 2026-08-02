@@ -3,14 +3,18 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './layouts/ProtectedRoute';
 import DashboardLayout from './layouts/DashboardLayout';
 import LoadingSpinner from './components/common/LoadingSpinner';
+import { Toaster } from 'sonner';
 
 // ─── Lazy-loaded pages ────────────────────────────────────────────────────────
 // Each page bundle is only downloaded when the user first navigates to that route,
 // reducing the initial JS payload for all roles.
 
 // Auth
-const Login    = lazy(() => import('./pages/auth/Login'));
-const Register = lazy(() => import('./pages/auth/Register'));
+const Login          = lazy(() => import('./pages/auth/Login'));
+const Register       = lazy(() => import('./pages/auth/Register'));
+const ForgotPassword = lazy(() => import('./pages/auth/ForgotPassword'));
+const ResetPassword  = lazy(() => import('./pages/auth/ResetPassword'));
+const VerifyEmail    = lazy(() => import('./pages/auth/VerifyEmail'));
 
 // Admin
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
@@ -38,12 +42,16 @@ const PageFallback = (
 
 const App: React.FC = () => (
   <BrowserRouter>
+    <Toaster position="top-right" theme="dark" richColors closeButton />
     <Suspense fallback={PageFallback}>
       <Routes>
         {/* Public */}
-        <Route path="/login"    element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/"         element={<Navigate to="/login" replace />} />
+        <Route path="/login"           element={<Login />} />
+        <Route path="/register"        element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password"  element={<ResetPassword />} />
+        <Route path="/verify-email"    element={<VerifyEmail />} />
+        <Route path="/"                element={<Navigate to="/login" replace />} />
 
         {/* Admin */}
         <Route element={<ProtectedRoute allowedRoles={['admin']} />}>

@@ -1,4 +1,4 @@
-import { body, validationResult } from "express-validator";
+import { body, query, validationResult } from "express-validator";
 import { Request, Response, NextFunction } from "express";
 import { ApiError } from "../utils/ApiError";
 
@@ -25,7 +25,8 @@ export const registerValidator = [
   body("email")
     .trim()
     .notEmpty().withMessage("Email is required")
-    .isEmail().withMessage("Please enter a valid email"),
+    .isEmail().withMessage("Please enter a valid email")
+    .normalizeEmail(),
 
   body("password")
     .notEmpty().withMessage("Password is required")
@@ -42,10 +43,66 @@ export const loginValidator = [
   body("email")
     .trim()
     .notEmpty().withMessage("Email is required")
-    .isEmail().withMessage("Please enter a valid email"),
+    .isEmail().withMessage("Please enter a valid email")
+    .normalizeEmail(),
 
   body("password")
     .notEmpty().withMessage("Password is required"),
+
+  validate,
+];
+
+// ─── Email Verification Validators ───────────────────────────────────────────
+
+/**
+ * Validates the ?token= query parameter in GET /api/auth/verify-email.
+ */
+export const verifyEmailValidator = [
+  query("token")
+    .notEmpty().withMessage("Verification token is required")
+    .isLength({ min: 64, max: 64 }).withMessage("Invalid token format"),
+
+  validate,
+];
+
+// ─── Password Reset Validators ────────────────────────────────────────────────
+
+/**
+ * Validates the email in POST /api/auth/forgot-password.
+ * Deliberately minimal — we don't reveal whether the email exists.
+ */
+export const forgotPasswordValidator = [
+  body("email")
+    .trim()
+    .notEmpty().withMessage("Email is required")
+    .isEmail().withMessage("Please enter a valid email address")
+    .normalizeEmail(),
+
+  validate,
+];
+
+/**
+ * Validates POST /api/auth/reset-password body.
+ * Token must be the raw 64-char hex string from the email URL.
+ * Password must meet the same minimum requirements as registration.
+ */
+export const resetPasswordValidator = [
+  body("token")
+    .notEmpty().withMessage("Reset token is required")
+    .isLength({ min: 64, max: 64 }).withMessage("Invalid token format"),
+
+  body("password")
+    .notEmpty().withMessage("New password is required")
+    .isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
+
+  body("confirmPassword")
+    .optional()
+    .custom((value, { req }) => {
+      if (value && value !== req.body.password) {
+        throw new Error("Passwords do not match");
+      }
+      return true;
+    }),
 
   validate,
 ];

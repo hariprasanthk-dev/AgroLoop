@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Order, OrderStat, OrderStatus, Pagination } from '../types';
 import { orderApi } from '../api/order.api';
+import { extractMessage } from '../utils/helpers';
 
 interface OrderState {
   orders: Order[];
@@ -21,10 +22,6 @@ interface OrderState {
   updateOrderPaymentStatusInList: (orderId: string, newPaymentStatus: 'pending' | 'paid' | 'failed' | 'refunded') => void;
   clearError: () => void;
 }
-
-const extractMessage = (err: unknown): string =>
-  (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-  ?? 'Something went wrong';
 
 export const useOrderStore = create<OrderState>((set, get) => ({
   orders: [],

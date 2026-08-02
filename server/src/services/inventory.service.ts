@@ -3,6 +3,7 @@ import InventoryBatch, {
 } from "../models/InventoryBatch.model";
 import { ApiError } from "../utils/ApiError";
 import { OnionCategory, BatchStatus, PaginationMeta } from "../types";
+import { logger } from "../config/logger";
 
 interface CreateBatchPayload {
   farmerId: string;
@@ -77,7 +78,7 @@ export const syncInventoryClassification = async (): Promise<void> => {
       }
     );
   } catch (error) {
-    console.error("Failed to sync inventory classifications:", error);
+    logger.error({ err: error }, "Failed to sync inventory classifications");
   }
 };
 

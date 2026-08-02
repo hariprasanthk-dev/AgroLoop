@@ -1,8 +1,18 @@
+/**
+ * server.ts — Application entry point.
+ *
+ * ⚠️  IMPORTANT: initSentry() MUST be called before any other import so that
+ * Sentry's auto-instrumentation hooks into all modules correctly.
+ */
+import { initSentry } from "./src/config/sentry";
+initSentry();
+
 import http from "http";
 import app from "./src/app";
 import { connectDB } from "./src/config/db";
 import { initSocket } from "./src/socket/socket";
 import { env } from "./src/config/env";
+import { logger } from "./src/config/logger";
 
 const PORT = parseInt(env.PORT, 10);
 
@@ -16,16 +26,10 @@ const startServer = async () => {
   // ─── Bind HTTP port FIRST so the server is reachable immediately ────────────
   await new Promise<void>((resolve) => {
     httpServer.listen(PORT, () => {
-      console.log(`
-  ╔══════════════════════════════════════════╗
-  ║           AgroLoop API Server            ║
-  ╠══════════════════════════════════════════╣
-  ║  Status   : Running                      ║
-  ║  Port     : ${PORT}                           ║
-  ║  Env      : ${env.NODE_ENV.padEnd(28)}  ║
-  ║  URL      : http://localhost:${PORT}           ║
-  ╚══════════════════════════════════════════╝
-      `);
+      logger.info(
+        { port: PORT, env: env.NODE_ENV, url: `http://localhost:${PORT}` },
+        "✅ AgroLoop API Server running"
+      );
       resolve();
     });
   });
@@ -35,9 +39,9 @@ const startServer = async () => {
 
   // ─── Graceful Shutdown ──────────────────────────────────────────────────────
   const shutdown = (signal: string) => {
-    console.log(`\n🛑 ${signal} received. Shutting down gracefully...`);
+    logger.info({ signal }, "Shutdown signal received — closing gracefully");
     httpServer.close(() => {
-      console.log("✅ HTTP server closed");
+      logger.info("HTTP server closed");
       process.exit(0);
     });
   };
@@ -46,12 +50,12 @@ const startServer = async () => {
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   process.on("unhandledRejection", (reason) => {
-    console.error("❌ Unhandled Promise Rejection:", reason);
+    logger.fatal({ reason }, "❌ Unhandled Promise Rejection");
     process.exit(1);
   });
 
   process.on("uncaughtException", (error) => {
-    console.error("❌ Uncaught Exception:", error);
+    logger.fatal({ err: error }, "❌ Uncaught Exception");
     process.exit(1);
   });
 };

@@ -64,3 +64,20 @@ export function truncate(str: string, n: number): string {
 export function getInitials(name: string): string {
   return name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
 }
+
+/**
+ * Extracts a human-readable error message from an Axios error response.
+ * Falls back to `fallback` (default: 'Something went wrong') when no
+ * server message is present.
+ *
+ * Single source of truth — import this instead of defining a local copy.
+ */
+export function extractMessage(
+  err: unknown,
+  fallback = 'Something went wrong'
+): string {
+  return (
+    (err as { response?: { data?: { message?: string } } })
+      ?.response?.data?.message ?? fallback
+  );
+}

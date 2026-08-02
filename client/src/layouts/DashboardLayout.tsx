@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/common/Sidebar';
 import Topbar from '../components/common/Topbar';
@@ -26,23 +26,28 @@ const DashboardLayout: React.FC = () => {
   // Initialise Socket.IO for real-time order & inventory updates
   useSocket();
 
-  return (
-    <div className="flex min-h-screen">
-      {/* Sidebar */}
-      <Sidebar />
+  // Close sidebar automatically on route change
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [pathname]);
 
-      {/* Mobile Overlay */}
+  return (
+    <div className="flex min-h-screen bg-slate-950 text-slate-100">
+      {/* Responsive Sidebar */}
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+      {/* Mobile Overlay Backdrop */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-30 lg:hidden transition-opacity duration-300"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Main content */}
-      <div className="flex-1 ml-64 flex flex-col min-h-screen">
+      {/* Main content container */}
+      <div className="flex-1 lg:ml-64 ml-0 flex flex-col min-h-screen w-full max-w-full overflow-x-hidden">
         <Topbar title={title} onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
-        <main className="flex-1 p-6 overflow-auto">
+        <main className="flex-1 p-4 sm:p-6 overflow-auto">
           <Outlet />
         </main>
       </div>
