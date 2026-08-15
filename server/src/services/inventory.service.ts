@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import InventoryBatch, {
   InventoryBatchDocument,
 } from "../models/InventoryBatch.model";
@@ -52,35 +53,33 @@ export const syncInventoryClassification = async (): Promise<void> => {
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
 
-    // 1. Rotten: Status != sold, and (status == expired OR intakeDate older than 60 days)
+    // 1. Age-based rotten classification: intakeDate older than 60 days → expired.
     await InventoryBatch.updateMany(
       {
-        status: { $ne: "sold" },
-        $or: [
-          { status: "expired" },
-          { intakeDate: { $lt: sixtyDaysAgo } }
-        ]
+        status: { $nin: ["sold", "expired"] },
+        intakeDate: { $exists: true, $ne: null, $lt: sixtyDaysAgo },
       },
-      {
-        $set: { category: "rotten", status: "expired" }
-      }
+      { $set: { category: "rotten", status: "expired" } }
     );
 
-    // 2. Sprouted: Status != sold, category != rotten, harvestDate older than 30 days
+    // 2. Sprouted: harvestDate older than 30 days.
+    //    IMPORTANT: only match when harvestDate actually exists and is not null.
+    //    Without the $exists/$ne guards, MongoDB's $lt comparison on null
+    //    evaluates to true, causing all batches without a harvestDate to be
+    //    incorrectly reclassified as sprouted.
     await InventoryBatch.updateMany(
       {
-        status: { $ne: "sold" },
+        status: { $nin: ["sold", "expired"] },
         category: { $ne: "rotten" },
-        harvestDate: { $lt: thirtyDaysAgo }
+        harvestDate: { $exists: true, $ne: null, $lt: thirtyDaysAgo },
       },
-      {
-        $set: { category: "sprouted" }
-      }
+      { $set: { category: "sprouted" } }
     );
   } catch (error) {
     logger.error({ err: error }, "Failed to sync inventory classifications");
   }
 };
+
 
 export const createBatch = async (
   payload: CreateBatchPayload
@@ -209,16 +208,33 @@ export const deleteBatch = async (
 
 export const getInventoryStats = async (farmerId?: string) => {
   await syncInventoryClassification();
+
+  // ── IMPORTANT: Aggregation pipelines bypass Mongoose's schema-aware query
+  // casting. Unlike .find({ farmerId: "string" }) which auto-casts to ObjectId,
+  // an aggregate $match stage compares values literally.
+  // Passing a plain string farmerId will NEVER match an ObjectId in MongoDB,
+  // causing all per-farmer stats to return 0 for every category.
+  // Fix: always cast to ObjectId before building the $match stage.
+  const farmerObjectId = farmerId
+    ? new mongoose.Types.ObjectId(farmerId)
+    : undefined;
+
   const matchStage: Record<string, unknown> = {};
-  if (farmerId) matchStage.farmerId = farmerId;
+  if (farmerObjectId) matchStage.farmerId = farmerObjectId;
 
   return InventoryBatch.aggregate([
-    ...(farmerId ? [{ $match: matchStage }] : []),
+    ...(farmerObjectId ? [{ $match: matchStage }] : []),
     {
       $group: {
         _id: "$category",
         totalBatches: { $sum: 1 },
-        totalQuantityKg: { $sum: "$quantityKg" },
+        // totalQuantityKg: counts current stock for non-expired batches.
+        // Batches with status "sold" have quantityKg = 0 (stock was decremented
+        // when the order was placed), so their contribution is naturally 0.
+        // Expired batches are explicitly excluded to keep totals meaningful.
+        totalQuantityKg: {
+          $sum: { $cond: [{ $ne: ["$status", "expired"] }, "$quantityKg", 0] },
+        },
         availableQuantityKg: {
           $sum: { $cond: [{ $eq: ["$status", "available"] }, "$quantityKg", 0] },
         },

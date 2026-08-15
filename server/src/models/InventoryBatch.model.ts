@@ -69,11 +69,9 @@ InventoryBatchSchema.pre<InventoryBatchDocument>("save", async function () {
     return;
   }
 
-  // Respect manual override if category is updated to sprouted or rotten
+  // Respect manual override: if the farmer explicitly sets category to 'sprouted'
+  // or 'rotten', skip the automatic age-based reclassification below.
   if (this.isModified("category") && (this.category === "sprouted" || this.category === "rotten")) {
-    if (this.category === "rotten") {
-      this.status = "expired";
-    }
     return;
   }
 
@@ -85,6 +83,7 @@ InventoryBatchSchema.pre<InventoryBatchDocument>("save", async function () {
     this.category = "rotten";
     this.status = "expired";
   } else if (this.harvestDate) {
+    // Only reclassify if harvestDate is actually set — avoids null-comparison issues
     const daysSinceHarvest = (now.getTime() - this.harvestDate.getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceHarvest > 30 && this.category !== "rotten") {
       this.category = "sprouted";

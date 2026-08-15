@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import Razorpay from "razorpay";
 import Order from "../models/Order.model";
+import InventoryBatch from "../models/InventoryBatch.model";
 import Payment, { PaymentDocument } from "../models/Payment.model";
 import Notification from "../models/Notification.model";
 import { ApiError } from "../utils/ApiError";
@@ -140,7 +141,7 @@ export const verifyPayment = async (
   );
 
   if (order) {
-    // DB notification for client
+    // ── Notify client ─────────────────────────────────────────────────────────
     await Notification.create({
       userId: order.clientId,
       title: "Payment Successful 🎉",
@@ -149,12 +150,35 @@ export const verifyPayment = async (
       relatedId: order._id,
     });
 
-    // Real-time socket event
     emit(`user:${order.clientId.toString()}`, "payment:success", {
       orderId: order._id.toString(),
       amount: order.totalAmount,
       paymentId: razorpayPaymentId,
     });
+
+    // ── Notify farmer ─────────────────────────────────────────────────────────
+    // We need the InventoryBatch to resolve the farmerId (not stored on Order).
+    const batch = await InventoryBatch.findById(order.inventoryBatchId).lean();
+    if (batch) {
+      const farmerRoom = `user:${batch.farmerId.toString()}`;
+      const shortId = order._id.toString().slice(-6);
+
+      // Real-time event — triggers the farmer's order store to re-fetch
+      emit(farmerRoom, "payment:received", {
+        orderId: order._id.toString(),
+        amount: order.totalAmount,
+        paymentStatus: "paid",
+      });
+
+      // Persistent DB notification visible in farmer's notification bell
+      await Notification.create({
+        userId: batch.farmerId,
+        title: "💰 Payment Received",
+        message: `Client paid ₹${order.totalAmount.toLocaleString("en-IN")} for order #${shortId}.`,
+        type: "payment_success",
+        relatedId: order._id,
+      });
+    }
   }
 
   return { payment, orderId: payment.orderId.toString() };

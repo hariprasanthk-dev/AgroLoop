@@ -40,7 +40,7 @@ const defaultFilters: FilterState = {
 const CATEGORIES = [
   { cat: 'fresh',    icon: '🧅', title: 'Fresh (Grade A)', desc: 'For consumers, restaurants, grocery stores',  color: 'border-emerald-500/40 bg-emerald-500/5 hover:bg-emerald-500/10' },
   { cat: 'sprouted', icon: '🌱', title: 'Sprouted Onions', desc: 'For farmers — ideal for cultivation',          color: 'border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10'    },
-  { cat: 'rotten',   icon: '♻️', title: 'Rotten Onions',   desc: 'For compost, biogas & livestock feed',         color: 'border-red-500/40 bg-red-500/5 hover:bg-red-500/10'        },
+  { cat: 'rotten',   icon: '♻️', title: 'Rotten Onions',   desc: 'Available for purchase at low prices',         color: 'border-red-500/40 bg-red-500/5 hover:bg-red-500/10'        },
 ] as const;
 
 // ─── Main Component ───────────────────────────────────────────────────────────

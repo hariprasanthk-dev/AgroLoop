@@ -206,7 +206,12 @@ export const cancelOrder = async (
   const batch = await InventoryBatch.findById(order.inventoryBatchId);
   if (batch) {
     batch.quantityKg += order.quantityKg;
-    if (batch.status === "reserved") batch.status = "available";
+    // Restore to 'available' whenever stock exists — covers both the normal
+    // case (was 'reserved') and the edge case where Bug #1 had erroneously
+    // marked the batch as 'sold' before the fix.
+    if (batch.quantityKg > 0 && batch.status !== "expired") {
+      batch.status = "available";
+    }
     await batch.save();
   }
 
@@ -309,7 +314,12 @@ export const rejectOrder = async (
 
   // Restore stock
   batch.quantityKg += order.quantityKg;
-  if (batch.status === "reserved") batch.status = "available";
+  // Restore to 'available' whenever stock exists — covers both the normal
+  // case (was 'reserved') and any edge case where the batch was incorrectly
+  // marked 'sold' despite having remaining stock.
+  if (batch.quantityKg > 0 && batch.status !== "expired") {
+    batch.status = "available";
+  }
   await batch.save();
 
   // Notify client
@@ -364,9 +374,19 @@ export const updateOrderStatus = async (
   const previousStatus = order.orderStatus;
   order.orderStatus = newStatus;
 
-  // Mark batch as sold when delivered
+  // Update batch status when the order reaches "delivered".
+  // IMPORTANT: Only mark the batch as "sold" when ALL stock is exhausted.
+  // Partial orders (e.g. 300 kg sold from a 500 kg batch) leave the batch
+  // with remaining stock — it must stay "available" for future orders.
   if (newStatus === "delivered") {
-    batch.status = "sold";
+    if (batch.quantityKg <= 0) {
+      batch.status = "sold";
+    } else {
+      // Remaining stock exists — keep it available.
+      // (also corrects any batch that was wrongly set to "reserved" when
+      //  stock hit zero due to this order but was later partially cancelled)
+      batch.status = "available";
+    }
     await batch.save();
   }
 
@@ -425,6 +445,15 @@ export const listOrders = async (
       { farmerId: new mongoose.Types.ObjectId(farmerId) },
       "_id"
     ).lean();
+
+    // If the farmer has no batches at all, return early — no orders possible.
+    if (farmerBatchIds.length === 0) {
+      return {
+        orders: [],
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      };
+    }
+
     filter.inventoryBatchId = { $in: farmerBatchIds.map((b) => b._id) };
   }
 

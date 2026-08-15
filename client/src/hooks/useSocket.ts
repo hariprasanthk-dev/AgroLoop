@@ -126,6 +126,18 @@ export const useSocket = (): void => {
       );
     });
 
+    // ── Payment received event (for farmer) ─────────────────────────────────────
+    // Emitted by the server when a client successfully completes payment.
+    // Updates the paymentStatus badge on the farmer's order card in real-time.
+    socket.on('payment:received', (payload: { orderId: string; amount: number; paymentStatus: string }) => {
+      updateOrderPaymentStatusInList(payload.orderId, 'paid');
+      showNotificationToast(
+        '💰 Payment Received',
+        `Client paid ₹${payload.amount.toLocaleString('en-IN')} for an order.`,
+        'success'
+      );
+    });
+
     // ── Inventory refresh (for everyone after stock changes) ────────────────────
     socket.on('inventory:refresh', () => {
       const { fetchBatches, lastParams } = useInventoryStore.getState();

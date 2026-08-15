@@ -30,6 +30,10 @@ import { logger } from "../config/logger";
 // ─── Shared settings ──────────────────────────────────────────────────────────
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
+// In development, use very high limits so local testing is never blocked.
+// All production limits remain enforced when NODE_ENV !== "development".
+const isDev = process.env.NODE_ENV === "development";
+
 const limitMessage = (msg: string) => ({ success: false, message: msg });
 
 // ─── In-memory limiter factory (used immediately at module load) ──────────────
@@ -39,6 +43,8 @@ const makeMemoryLimiter = (overrides: Partial<RateLimitOptions>) =>
     standardHeaders: true,
     legacyHeaders: false,
     statusCode: 429,
+    // Skip ALL rate limiting in development — never blocks local testing.
+    skip: isDev ? () => true : undefined,
     ...overrides,
   });
 

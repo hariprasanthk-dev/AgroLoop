@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Loader2, Package, MapPin, Calendar, TrendingUp, Weight } from 'lucide-react';
+import { Plus, Pencil, Trash2, Loader2, Package, MapPin, Calendar, TrendingUp, Weight, RefreshCw } from 'lucide-react';
 import { useInventoryStore } from '../../stores/inventory.store';
 import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
@@ -251,8 +251,14 @@ const FarmerInventory: React.FC = () => {
 
       {/* ── Error Banner ─────────────────────────────────────────────────────── */}
       {error && (
-        <div className="glass-card p-4 border border-red-500/30 bg-red-500/10">
+        <div className="glass-card p-4 border border-red-500/30 bg-red-500/10 flex items-center justify-between gap-4">
           <p className="text-red-400 text-sm">⚠️ {error}</p>
+          <button
+            onClick={() => { fetchBatches(); fetchStats(); }}
+            className="btn-secondary shrink-0 text-xs py-1.5 px-3"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Retry
+          </button>
         </div>
       )}
 

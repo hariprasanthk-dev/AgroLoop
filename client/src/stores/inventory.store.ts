@@ -49,8 +49,10 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       await inventoryApi.create(data);
-      // Re-fetch with last params so list is authoritative from server
+      // Re-fetch with last params so list is authoritative from server.
+      // Also clears any stale error from a previous failed fetch.
       await get().fetchBatches(get().lastParams);
+      set({ error: null }); // ensure cleared even if fetchBatches didn't change it
     } catch (err) {
       set({ error: extractMessage(err), isLoading: false });
       throw err;

@@ -21,9 +21,12 @@ export const connectDB = async (attempt = 1): Promise<void> => {
       "Connecting to MongoDB Atlas..."
     );
     const conn = await mongoose.connect(env.MONGO_URI, {
-      serverSelectionTimeoutMS: 10000,
+      serverSelectionTimeoutMS: 5000,  // Fail fast: 5s instead of 10s
       socketTimeoutMS: 45000,
       connectTimeoutMS: 10000,
+      // Don't buffer commands when disconnected — fail immediately
+      // so users get an error right away instead of a 10s hang
+      bufferCommands: false,
     });
 
     isConnected = true;
