@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: agroloop-api
+    runtime: node
+    region: singapore        # Closest region to India
+    plan: free
+    rootDir: server          # adjust if deploying from repo root
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false          # Set in Render dashboard
+      - key: JWT_SECRET
+        generateValue: true  # Render auto-generates a secure random value
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: RAZORPAY_KEY_ID
+        sync: false          # Set in Render dashboard
+      - key: RAZORPAY_KEY_SECRET
+        sync: false          # Set in Render dashboard
+      - key: CLIENT_URL
+        sync: false          # e.g. https://agroloop.vercel.app
+      # Optional — uncomment to enable
+      # - key: SENTRY_DSN
+      #   sync: false
+      # - key: SMTP_HOST
+      #   sync: false
+      # - key: SMTP_PORT
+      #   value: "587"
+      # - key: SMTP_USER
+      #   sync: false
+      # - key: SMTP_PASS
+      #   sync: false
+      # - key: SMTP_FROM
+      #   sync: false
+      # - key: CLIENT_RESET_URL
+      #   sync: false
+      # - key: CLOUDINARY_CLOUD_NAME
+      #   sync: false
+      # - key: CLOUDINARY_API_KEY
+      #   sync: false
+      # - key: CLOUDINARY_API_SECRET
+      #   sync: false
+      # - key: UPSTASH_REDIS_REST_URL
+      #   sync: false
+      # - key: UPSTASH_REDIS_REST_TOKEN
+      #   sync: false
