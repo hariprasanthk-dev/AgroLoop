@@ -5,7 +5,7 @@ services:
     region: singapore        # Closest region to India
     plan: free
     rootDir: server          # adjust if deploying from repo root
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm run start
     healthCheckPath: /health
     envVars:
