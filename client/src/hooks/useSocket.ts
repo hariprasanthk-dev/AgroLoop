@@ -128,9 +128,25 @@ export const useSocket = (): void => {
 
     // ── Payment received event (for farmer) ─────────────────────────────────────
     // Emitted by the server when a client successfully completes payment.
-    // Updates the paymentStatus badge on the farmer's order card in real-time.
+    // Updates the paymentStatus badge on the farmer's order card in real-time
+    // and increments the notification bell without requiring a page refresh.
     socket.on('payment:received', (payload: { orderId: string; amount: number; paymentStatus: string }) => {
       updateOrderPaymentStatusInList(payload.orderId, 'paid');
+
+      // Push a transient notification into the store so the bell count updates
+      // immediately. The persistent DB notification was already created by the
+      // backend; fetchNotifications() on the next mount will load the real one.
+      const n: Notification = {
+        _id: `socket-payment-${payload.orderId}-${Date.now()}`,
+        userId: '',
+        title: '💰 Payment Received',
+        message: `Client paid ₹${payload.amount.toLocaleString('en-IN')} for an order.`,
+        type: 'payment_success',
+        isRead: false,
+        createdAt: new Date().toISOString(),
+      };
+      addNotification(n);
+
       showNotificationToast(
         '💰 Payment Received',
         `Client paid ₹${payload.amount.toLocaleString('en-IN')} for an order.`,
