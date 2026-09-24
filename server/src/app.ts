@@ -29,6 +29,7 @@ import uploadRoutes from "./routes/upload.routes";
 
 // Middleware
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
+import { razorpayWebhook } from "./controllers/payment.controller";
 
 const app = express();
 
@@ -41,7 +42,16 @@ app.use(helmet());
 app.use(cors(corsOptions));
 
 // ─── Body Parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: "10mb" }));
+app.use(
+  express.json({
+    limit: "10mb",
+    // Keep the exact bytes for endpoints that verify an HMAC over the body
+    // (Razorpay webhook). Re-serialising parsed JSON would break the signature.
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Input Sanitization ──────────────────────────────────────────────────────
@@ -90,6 +100,10 @@ const API_PREFIX = "/api";
 
 // Auth routes — strict limiter (10 req / 15 min) to block brute-force attacks
 app.use(`${API_PREFIX}/auth`, authLimiter, authRoutes);
+
+// Razorpay webhook — server-to-server, authenticated by HMAC signature, so it
+// is registered before the auth-protected payment router and its rate limiter.
+app.post(`${API_PREFIX}/payments/webhook`, razorpayWebhook);
 
 // Payment routes — tighter limiter (20 req / 15 min) to prevent fraud
 app.use(`${API_PREFIX}/payments`, paymentLimiter, paymentRoutes);

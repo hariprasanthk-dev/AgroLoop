@@ -48,13 +48,13 @@ export const rejectOrder = asyncHandler(
   }
 );
 
-// ─── Farmer: Update Order Status ──────────────────────────────────────────────
+// ─── Farmer: Update Order Status (admin: cancel only) ─────────────────────────
 export const updateOrderStatus = asyncHandler(
   async (req: AuthenticatedRequest, res: Response) => {
     const { orderStatus } = req.body;
     const order = await OrderService.updateOrderStatus(
       String(req.params.id),
-      req.user!.id,
+      { id: req.user!.id, role: req.user!.role },
       orderStatus as OrderStatus
     );
     return ApiResponse.ok(res, "Order status updated", order);

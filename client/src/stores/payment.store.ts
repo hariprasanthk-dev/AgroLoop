@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Payment, Pagination, PaymentStatus } from '../types';
+import type { Payment, Pagination } from '../types';
 import { paymentApi } from '../api/payment.api';
 import { extractMessage } from '../utils/helpers';
 
@@ -34,12 +34,15 @@ interface PaymentState {
     razorpay_signature: string;
   }) => Promise<{ payment: Payment; orderId: string }>;
   recordFailure: (razorpayOrderId: string, description?: string) => Promise<void>;
-  updatePaymentStatus: (orderId: string, status: PaymentStatus) => void;
+  /** Re-fetch the list with the last-used params (after a socket update). */
+  refreshPayments: () => Promise<void>;
   clearError: () => void;
+  lastParams: { page?: number; limit?: number; status?: string } | null;
 }
 
-export const usePaymentStore = create<PaymentState>((set) => ({
+export const usePaymentStore = create<PaymentState>((set, get) => ({
   payments: [],
+  lastParams: null,
   stats: null,
   pagination: null,
   isLoading: false,
@@ -47,7 +50,7 @@ export const usePaymentStore = create<PaymentState>((set) => ({
   error: null,
 
   fetchPayments: async (params) => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true, error: null, lastParams: params ?? {} });
     try {
       const res = await paymentApi.list(params);
       set({
@@ -56,7 +59,7 @@ export const usePaymentStore = create<PaymentState>((set) => ({
         isLoading: false,
       });
     } catch (err) {
-      set({ error: extractMessage(err), isLoading: false });
+      set({ error: extractMessage(err, 'Failed to load payments'), isLoading: false });
     }
   },
 
@@ -64,7 +67,9 @@ export const usePaymentStore = create<PaymentState>((set) => ({
     try {
       const res = await paymentApi.stats();
       set({ stats: res.data.data ?? null });
-    } catch {/* silent */}
+    } catch (err) {
+      set({ error: extractMessage(err, 'Failed to load payment statistics') });
+    }
   },
 
   initiatePayment: async (orderId) => {
@@ -74,8 +79,9 @@ export const usePaymentStore = create<PaymentState>((set) => ({
       set({ isInitiating: false });
       return res.data.data!;
     } catch (err) {
-      set({ error: extractMessage(err), isInitiating: false });
-      throw err;
+      const message = extractMessage(err, 'Could not start the payment. Please try again.');
+      set({ error: message, isInitiating: false });
+      throw new Error(message);
     }
   },
 
@@ -86,24 +92,24 @@ export const usePaymentStore = create<PaymentState>((set) => ({
       set({ isLoading: false });
       return res.data.data!;
     } catch (err) {
-      set({ error: extractMessage(err), isLoading: false });
-      throw err;
+      const message = extractMessage(err, 'We could not confirm your payment.');
+      set({ error: message, isLoading: false });
+      throw new Error(message);
     }
   },
 
   recordFailure: async (razorpayOrderId, description) => {
     try {
       await paymentApi.failed({ razorpay_order_id: razorpayOrderId, error_description: description });
-    } catch {/* silent — UI already shows failure */}
+    } catch (err) {
+      // Surface it: the order would otherwise keep showing "pending".
+      throw new Error(extractMessage(err, 'Could not record the failed payment'));
+    }
   },
 
-  updatePaymentStatus: (orderId, status) => {
-    set((state) => ({
-      payments: state.payments.map((p) => {
-        const pOrderId = typeof p.orderId === 'object' ? p.orderId._id : p.orderId;
-        return pOrderId === orderId ? { ...p, status } : p;
-      }),
-    }));
+  refreshPayments: async () => {
+    const params = get().lastParams;
+    if (params) await get().fetchPayments(params);
   },
 
   clearError: () => set({ error: null }),

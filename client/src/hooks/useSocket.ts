@@ -1,13 +1,12 @@
 /**
  * useSocket – manages a persistent Socket.IO connection for the authenticated user.
  *
- * Responsibilities:
- *  - Connect with JWT from Zustand auth store (single source of truth)
- *  - Join user's private room automatically (server does this on connection)
- *  - Handle 'notification:new'  → add to notification store + show toast
- *  - Handle 'order:statusUpdate' → sync order store + show toast
- *  - Handle 'inventory:refresh' → re-fetch inventory store
- *  - Disconnect cleanly on unmount / logout
+ * Socket events are *signals*, never state:
+ *  - 'notification:new'  → the notification document the server just saved
+ *                          (real _id / relatedId) → add to bell + toast
+ *  - 'order:updated'     → { orderId } → re-fetch that order from the API
+ *  - 'inventory:refresh' → re-fetch inventory
+ * Order and payment status shown in the UI always come from the REST API.
  */
 import { useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
@@ -17,46 +16,25 @@ import { useNotificationStore } from '../stores/notification.store';
 import { useInventoryStore } from '../stores/inventory.store';
 import { usePaymentStore } from '../stores/payment.store';
 import { useAuthStore } from '../stores/auth.store';
-import type { OrderStatus, Notification } from '../types';
+import type { Notification } from '../types';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL ||
+  (import.meta.env.VITE_API_URL ? String(import.meta.env.VITE_API_URL).replace(/\/api\/?$/, '') : 'http://localhost:5000');
 
-interface OrderStatusUpdate {
-  orderId: string;
-  previousStatus: OrderStatus;
-  newStatus: OrderStatus;
-  message?: string;
-}
-
-interface IncomingNotification {
-  title: string;
-  message: string;
-  type: string;
-  orderId?: string;
-}
-
-const showNotificationToast = (
-  title: string,
-  message: string,
-  variant: 'success' | 'info' | 'warning' = 'info'
-) => {
-  if (variant === 'success') {
-    toast.success(title, { description: message });
-  } else if (variant === 'warning') {
-    toast.warning(title, { description: message });
-  } else {
-    toast.info(title, { description: message });
-  }
+const TOAST_VARIANT: Partial<Record<Notification['type'], 'success' | 'warning' | 'error'>> = {
+  payment_success: 'success',
+  order_accepted: 'success',
+  order_delivered: 'success',
+  order_rejected: 'warning',
+  order_cancelled: 'warning',
+  payment_failed: 'error',
 };
 
 export const useSocket = (): void => {
   const socketRef = useRef<Socket | null>(null);
-  const { updateOrderInList, updateOrderPaymentStatusInList } = useOrderStore.getState();
-  const { addNotification } = useNotificationStore.getState();
-  const { updatePaymentStatus } = usePaymentStore.getState();
 
   useEffect(() => {
-    // Read token from Zustand (single source of truth) instead of localStorage directly.
     const token = useAuthStore.getState().token;
     if (!token) return;
 
@@ -70,98 +48,32 @@ export const useSocket = (): void => {
       reconnectionAttempts: 5,
       reconnectionDelay: 2000,
     });
-
     socketRef.current = socket;
 
-    socket.on('connect', () => {
-      console.log('🔌 Socket connected:', socket.id);
-    });
-
     socket.on('connect_error', (err) => {
-      console.warn('⚠️ Socket connect error:', err.message);
+      console.warn('Socket connect error:', err.message);
     });
 
-    // ── Incoming notification (for farmer: new order received) ─────────────────
-    socket.on('notification:new', (payload: IncomingNotification) => {
-      const n: Notification = {
-        _id: `socket-${Date.now()}`,
-        userId: '',
-        title: payload.title,
-        message: payload.message,
-        type: payload.type as Notification['type'],
-        isRead: false,
-        createdAt: new Date().toISOString(),
-      };
-      addNotification(n);
-      showNotificationToast(payload.title, payload.message, 'info');
+    socket.on('notification:new', (notification: Notification) => {
+      useNotificationStore.getState().addNotification(notification);
+      const variant = TOAST_VARIANT[notification.type];
+      const show = variant ? toast[variant] : toast.info;
+      // Keyed by order + type so a page-level toast for the same event is replaced, not duplicated.
+      show(notification.title, {
+        description: notification.message,
+        id: notification.relatedId ? `${notification.relatedId}:${notification.type}` : notification._id,
+      });
     });
 
-    // ── Order status update (for client) ────────────────────────────────────────
-    socket.on('order:statusUpdate', (payload: OrderStatusUpdate) => {
-      updateOrderInList(payload.orderId, payload.newStatus);
-
-      const statusVariant: Record<string, 'success' | 'info' | 'warning'> = {
-        accepted: 'success',
-        packed: 'info',
-        shipped: 'info',
-        delivered: 'success',
-        cancelled: 'warning',
-      };
-
-      showNotificationToast(
-        `Order ${payload.newStatus.charAt(0).toUpperCase() + payload.newStatus.slice(1)}`,
-        payload.message ?? `Your order status changed to ${payload.newStatus}`,
-        statusVariant[payload.newStatus] ?? 'info'
-      );
+    socket.on('order:updated', ({ orderId }: { orderId: string }) => {
+      // Re-read from the database-backed API; the event carries no status.
+      useOrderStore.getState().refreshOrder(orderId);
+      usePaymentStore.getState().refreshPayments();
     });
 
-    // ── Payment success event (for client) ──────────────────────────────────────
-    socket.on('payment:success', (payload: { orderId: string; amount: number; paymentId: string }) => {
-      updateOrderPaymentStatusInList(payload.orderId, 'paid');
-      updatePaymentStatus(payload.orderId, 'paid');
-      showNotificationToast(
-        'Payment Successful 🎉',
-        `Payment of ₹${payload.amount.toLocaleString('en-IN')} has been verified.`,
-        'success'
-      );
-    });
-
-    // ── Payment received event (for farmer) ─────────────────────────────────────
-    // Emitted by the server when a client successfully completes payment.
-    // Updates the paymentStatus badge on the farmer's order card in real-time
-    // and increments the notification bell without requiring a page refresh.
-    socket.on('payment:received', (payload: { orderId: string; amount: number; paymentStatus: string }) => {
-      updateOrderPaymentStatusInList(payload.orderId, 'paid');
-
-      // Push a transient notification into the store so the bell count updates
-      // immediately. The persistent DB notification was already created by the
-      // backend; fetchNotifications() on the next mount will load the real one.
-      const n: Notification = {
-        _id: `socket-payment-${payload.orderId}-${Date.now()}`,
-        userId: '',
-        title: '💰 Payment Received',
-        message: `Client paid ₹${payload.amount.toLocaleString('en-IN')} for an order.`,
-        type: 'payment_success',
-        isRead: false,
-        createdAt: new Date().toISOString(),
-      };
-      addNotification(n);
-
-      showNotificationToast(
-        '💰 Payment Received',
-        `Client paid ₹${payload.amount.toLocaleString('en-IN')} for an order.`,
-        'success'
-      );
-    });
-
-    // ── Inventory refresh (for everyone after stock changes) ────────────────────
     socket.on('inventory:refresh', () => {
       const { fetchBatches, lastParams } = useInventoryStore.getState();
       fetchBatches(Object.keys(lastParams).length ? lastParams : { status: 'available', limit: 50 });
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('🔌 Socket disconnected:', reason);
     });
 
     return () => {

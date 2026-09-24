@@ -121,12 +121,12 @@ export const loginUser = async (payload: LoginPayload): Promise<AuthResult> => {
 
   if (!user) {
     // Use a generic message to prevent email enumeration
-    throw ApiError.unauthorized("Invalid email or password");
+    throw ApiError.unauthorized("Invalid email or password.");
   }
 
   const isMatch = await user.comparePassword(password);
   if (!isMatch) {
-    throw ApiError.unauthorized("Invalid email or password");
+    throw ApiError.unauthorized("Invalid email or password.");
   }
 
   const token = generateToken(user);

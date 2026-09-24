@@ -7,6 +7,8 @@ import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
 import type { InventoryBatch, OnionCategory, BatchStatus } from '../../types';
 import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+import { extractMessage } from '../../utils/helpers';
 
 interface EditForm {
   category: OnionCategory;
@@ -36,14 +38,24 @@ const AdminInventory: React.FC = () => {
 
   const onUpdate = async (data: EditForm) => {
     if (!editBatch) return;
-    await updateBatch(editBatch._id, data);
-    setEditBatch(null);
+    try {
+      await updateBatch(editBatch._id, data);
+      toast.success('Batch updated');
+      setEditBatch(null);
+    } catch (err) {
+      toast.error('Could not update batch', { description: extractMessage(err, 'Please try again.') });
+    }
   };
 
   const handleDelete = async () => {
     if (!deleteId) return;
-    await deleteBatch(deleteId);
-    setDeleteId(null);
+    try {
+      await deleteBatch(deleteId);
+      toast.success('Batch deleted');
+      setDeleteId(null);
+    } catch (err) {
+      toast.error('Could not delete batch', { description: extractMessage(err, 'Please try again.') });
+    }
   };
 
   const filtered = batches.filter(b => {

@@ -18,7 +18,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 const ORDER_STATUS_COLORS: Record<string, string> = {
   pending: '#3B82F6',
   accepted: '#8B5CF6',
-  packed: '#06B6D4',
+  packaged: '#06B6D4',
   shipped: '#F59E0B',
   delivered: '#10B981',
   cancelled: '#EF4444',

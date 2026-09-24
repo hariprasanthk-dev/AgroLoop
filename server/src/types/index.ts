@@ -48,10 +48,16 @@ export type PaymentStatus = "pending" | "paid" | "failed" | "refunded";
 export type OrderStatus =
   | "pending"
   | "accepted"
-  | "packed"
+  | "packaged"
   | "shipped"
   | "delivered"
   | "cancelled";
+
+/**
+ * Status value written by earlier versions of the app. Still readable so old
+ * documents keep working; run `npm run migrate:order-status` to rewrite them.
+ */
+export const LEGACY_PACKAGED_STATUS = "packed";
 
 export interface IOrder {
   _id: Types.ObjectId;
@@ -63,8 +69,16 @@ export interface IOrder {
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus;
   notes?: string;
+  statusHistory: OrderStatusHistoryEntry[];
+  cancelledBy?: "client" | "farmer" | "admin";
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface OrderStatusHistoryEntry {
+  status: OrderStatus;
+  at: Date;
+  by?: UserRole | "system";
 }
 
 // ─── Payment ─────────────────────────────────────────────────────────────────
@@ -90,12 +104,14 @@ export interface IPayment {
 export type NotificationType =
   | "order_placed"
   | "order_accepted"
-  | "order_packed"
+  | "order_packaged"
+  | "order_packed" // legacy — kept so existing notification documents stay valid
   | "order_shipped"
   | "order_delivered"
   | "order_rejected"
   | "order_cancelled"
   | "payment_success"
+  | "payment_failed"
   | "inventory_update"
   | "general";
 

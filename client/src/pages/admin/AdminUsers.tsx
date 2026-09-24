@@ -5,6 +5,8 @@ import Modal from '../../components/common/Modal';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { formatDate, getInitials } from '../../utils/helpers';
 import type { User } from '../../types';
+import { toast } from 'sonner';
+import { extractMessage } from '../../utils/helpers';
 
 const roleBadge: Record<string, string> = {
   admin:  'bg-purple-500/20 text-purple-400 border-purple-500/30',
@@ -18,15 +20,25 @@ const AdminUsers: React.FC = () => {
   const [search, setSearch] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
-    userApi.list().then(res => { setUsers(res.data.data ?? []); setIsLoading(false); });
+    userApi.list()
+      .then(res => setUsers(res.data.data ?? []))
+      .catch(err => setLoadError(extractMessage(err, 'Failed to load users')))
+      .finally(() => setIsLoading(false));
   }, []);
 
   const handleDelete = async () => {
     if (!deleteId) return;
-    await userApi.delete(deleteId);
-    setUsers(prev => prev.filter(u => u._id !== deleteId));
-    setDeleteId(null);
+    try {
+      await userApi.delete(deleteId);
+      setUsers(prev => prev.filter(u => u._id !== deleteId));
+      toast.success('User deleted');
+      setDeleteId(null);
+    } catch (err) {
+      toast.error('Could not delete user', { description: extractMessage(err, 'Please try again.') });
+    }
   };
 
   const filtered = users.filter(u =>
@@ -55,7 +67,9 @@ const AdminUsers: React.FC = () => {
             <table className="data-table">
               <thead><tr><th>User</th><th>Role</th><th>Joined</th><th>Actions</th></tr></thead>
               <tbody>
-                {filtered.length === 0 ? (
+                {loadError ? (
+                  <tr><td colSpan={4} className="text-center py-16 text-red-300">{loadError}</td></tr>
+                ) : filtered.length === 0 ? (
                   <tr><td colSpan={4} className="text-center py-16 text-slate-500">No users found</td></tr>
                 ) : filtered.map(user => (
                   <tr key={user._id}>

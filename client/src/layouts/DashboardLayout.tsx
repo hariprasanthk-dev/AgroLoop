@@ -21,7 +21,8 @@ const titleMap: Record<string, string> = {
 const DashboardLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { pathname } = useLocation();
-  const title = titleMap[pathname] ?? 'AgroLoop';
+  // Deep links such as /farmer/orders/:orderId use their list page's title.
+  const title = titleMap[pathname] ?? titleMap[pathname.split('/').slice(0, 3).join('/')] ?? 'AgroLoop';
 
   // Initialise Socket.IO for real-time order & inventory updates
   useSocket();

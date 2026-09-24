@@ -291,11 +291,10 @@ async function runTests() {
   console.log(`🔹 Inventory after race: ${raceBatchDoc.quantityKg} kg (never negative): PASS`);
   console.log("✅ Race Condition Test: PASS\n");
 
-  // Farmer accepts order
-  const acceptOrd = await apiRequest(`${BASE_URL}/orders/${testOrderId}/accept`, "PUT", {}, farmerToken);
-  if (!acceptOrd.ok) throw new Error("Farmer order accept failed");
-  if (acceptOrd.data.data.orderStatus !== "accepted") throw new Error("Order status should be accepted");
-  console.log("🔹 Farmer accepts pending order: PASS");
+  // Payment is taken before the farmer can accept (see order.service TRANSITIONS).
+  const earlyAccept = await apiRequest(`${BASE_URL}/orders/${testOrderId}/accept`, "PUT", {}, farmerToken);
+  if (earlyAccept.status !== 400) throw new Error("Unpaid order must not be acceptable");
+  console.log("🔹 Farmer cannot accept an unpaid order: PASS");
 
   // ─── 4. PAYMENT TESTS ───
   console.log("\n💳 Running Payment Tests...");
@@ -333,16 +332,23 @@ async function runTests() {
   }
   console.log("🔹 Order marked as paid: PASS");
 
-  // Farmer advances status to delivered: accepted -> packed -> shipped -> delivered
-  const packedState = await apiRequest(`${BASE_URL}/orders/${testOrderId}/status`, "PUT", { orderStatus: "packed" }, farmerToken);
-  if (!packedState.ok) throw new Error("Status to packed failed: " + JSON.stringify(packedState.data));
+  // Farmer accepts order
+  const acceptOrd = await apiRequest(`${BASE_URL}/orders/${testOrderId}/accept`, "PUT", {}, farmerToken);
+  if (!acceptOrd.ok) throw new Error("Farmer order accept failed");
+  if (acceptOrd.data.data.orderStatus !== "accepted") throw new Error("Order status should be accepted");
+  console.log("🔹 Farmer accepts paid order: PASS");
+
+
+  // Farmer advances status to delivered: accepted -> packaged -> shipped -> delivered
+  const packagedState = await apiRequest(`${BASE_URL}/orders/${testOrderId}/status`, "PUT", { orderStatus: "packaged" }, farmerToken);
+  if (!packagedState.ok) throw new Error("Status to packaged failed: " + JSON.stringify(packagedState.data));
 
   const shippedState = await apiRequest(`${BASE_URL}/orders/${testOrderId}/status`, "PUT", { orderStatus: "shipped" }, farmerToken);
   if (!shippedState.ok) throw new Error("Status to shipped failed");
 
   const deliveredState = await apiRequest(`${BASE_URL}/orders/${testOrderId}/status`, "PUT", { orderStatus: "delivered" }, farmerToken);
   if (!deliveredState.ok) throw new Error("Status to delivered failed");
-  console.log("🔹 Farmer advances order status accepted → packed → shipped → delivered: PASS");
+  console.log("🔹 Farmer advances order status accepted → packaged → shipped → delivered: PASS");
 
   // Assert batch status is now sold
   const finalBatch = await InventoryBatch.findById(freshBatchId);

@@ -1,94 +1,156 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import {
-  Package, Search, CheckCircle2, XCircle, Truck,
-  BoxIcon, Clock, TrendingUp, Users, Loader2,
-  AlertCircle, ChevronDown,
+  Package, Search, CheckCircle2, XCircle, Truck, Clock, Users, Loader2,
+  AlertCircle, AlertTriangle, RefreshCw, CreditCard, MapPin, CalendarDays, Scale, IndianRupee,
 } from 'lucide-react';
 import { useOrderStore } from '../../stores/order.store';
-import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Modal from '../../components/common/Modal';
 import OrderActions from '../../components/orders/OrderActions';
+import OrderProgress from '../../components/orders/OrderProgress';
 import FarmerStatCard from '../../components/orders/FarmerStatCard';
-import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
+import { OrderStatusPair } from '../../components/orders/StatusBadges';
+import { formatCurrency, formatDate, formatWeight } from '../../utils/helpers';
+import {
+  formatOrderRef, ORDER_STATUS_FILTERS, ORDER_STATUS_LABEL, needsManualRefund, normalizeOrderStatus,
+} from '../../constants/orderStatus';
 import type { Order, OrderStatus } from '../../types';
 
-const STATUS_ICON: Record<string, React.ReactNode> = {
-  pending:   <Clock className="w-4 h-4 text-amber-400" />,
-  accepted:  <CheckCircle2 className="w-4 h-4 text-blue-400" />,
-  packed:    <BoxIcon className="w-4 h-4 text-purple-400" />,
-  shipped:   <Truck className="w-4 h-4 text-cyan-400" />,
-  delivered: <CheckCircle2 className="w-4 h-4 text-emerald-400" />,
-  cancelled: <XCircle className="w-4 h-4 text-red-400" />,
+const CATEGORY_LABEL: Record<string, string> = {
+  fresh: 'Fresh (Grade A) Onions',
+  sprouted: 'Sprouted Onions',
+  rotten: 'Processing-grade Onions',
 };
 
-// Local constants used by the detail modal's advance button
-const NEXT_STATUS: Record<string, OrderStatus | null> = {
-  accepted:  'packed',
-  packed:    'shipped',
-  shipped:   'delivered',
-  delivered: null,
-};
-const NEXT_STATUS_LABEL: Record<string, string> = {
-  accepted: '📦 Mark as Packed',
-  packed:   '🚚 Mark as Shipped',
-  shipped:  '✅ Mark as Delivered',
+const productName = (order: Order) => {
+  const batch = typeof order.inventoryBatchId === 'object' ? order.inventoryBatchId : null;
+  return batch ? CATEGORY_LABEL[batch.category] ?? `${batch.category} onions` : 'Batch no longer available';
 };
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+const TRANSITION_SUCCESS: Partial<Record<OrderStatus, string>> = {
+  accepted:  'Order accepted. The client has been notified.',
+  packaged:  'Order marked as packaged.',
+  shipped:   'Order marked as shipped.',
+  delivered: 'Order marked as delivered.',
+  cancelled: 'Order cancelled. The client has been notified.',
+};
+
+/** Blocks a stale double-click from hitting the *next* action that renders in the same place. */
+const POST_ACTION_LOCK_MS = 800;
+
 const FarmerOrders: React.FC = () => {
-  const { orders, isLoading, pagination, fetchOrders, acceptOrder, rejectOrder, updateOrderStatus, error } = useOrderStore();
+  const { orderId } = useParams<{ orderId?: string }>();
+  const navigate = useNavigate();
+  const {
+    orders, isLoading, pagination, error, fetchOrders, refreshOrder,
+    acceptOrder, rejectOrder, updateOrderStatus,
+  } = useOrderStore();
+
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [rejectConfirmId, setRejectConfirmId] = useState<string | null>(null);
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [confirmCancel, setConfirmCancel] = useState<Order | null>(null);
+  const [deepLinkLoading, setDeepLinkLoading] = useState(false);
+  const hasLoaded = useRef(false);
 
   const load = useCallback(() => {
-    fetchOrders({ orderStatus: filterStatus || undefined, limit: 50 });
+    fetchOrders({ orderStatus: filterStatus || undefined, limit: 50 }).then(() => { hasLoaded.current = true; });
   }, [fetchOrders, filterStatus]);
 
   useEffect(() => { load(); }, [load]);
 
+  // ── Deep link: /farmer/orders/:orderId ──────────────────────────────────────
+  const selectedOrder = orderId ? orders.find((o) => o._id === orderId) ?? null : null;
+
+  useEffect(() => {
+    if (!orderId || selectedOrder || isLoading || !hasLoaded.current) return;
+    setDeepLinkLoading(true);
+    refreshOrder(orderId).then((order) => {
+      setDeepLinkLoading(false);
+      if (!order) {
+        toast.error('That order could not be found or you do not have access to it.');
+        navigate('/farmer/orders', { replace: true });
+      }
+    });
+  }, [orderId, selectedOrder, isLoading, refreshOrder, navigate]);
+
+  const openOrder = (id: string) => navigate(`/farmer/orders/${id}`);
+  const closeOrder = () => navigate('/farmer/orders');
+
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const setBusy = (id: string, on: boolean) =>
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+
+  const run = async (id: string, to: OrderStatus, action: () => Promise<Order>) => {
+    if (busyIds.has(id)) return; // prevent duplicate submissions
+    setBusy(id, true);
+    let ok = false;
+    try {
+      await action();
+      ok = true;
+      toast.success(TRANSITION_SUCCESS[to] ?? 'Order updated.');
+    } catch (err) {
+      toast.error((err as Error).message);
+      // Our view may be stale (e.g. payment state changed) — re-read the truth.
+      refreshOrder(id);
+    } finally {
+      if (ok) setTimeout(() => setBusy(id, false), POST_ACTION_LOCK_MS);
+      else setBusy(id, false);
+    }
+    return ok;
+  };
+
+  const handleAccept = (id: string) => run(id, 'accepted', () => acceptOrder(id));
+  const handleAdvance = (id: string, status: OrderStatus) => run(id, status, () => updateOrderStatus(id, status));
+
+  const handleConfirmCancel = async () => {
+    if (!confirmCancel) return;
+    const order = confirmCancel;
+    const ok = await run(order._id, 'cancelled', () =>
+      normalizeOrderStatus(order.orderStatus) === 'pending'
+        ? rejectOrder(order._id)
+        : updateOrderStatus(order._id, 'cancelled')
+    );
+    if (ok) setConfirmCancel(null); // keep the dialog open on failure
+  };
+
+  // ── Derived data ───────────────────────────────────────────────────────────
   const filtered = orders.filter((o) => {
     if (!search) return true;
     const q = search.toLowerCase();
     const client = typeof o.clientId === 'object' ? o.clientId : null;
-    const batch = typeof o.inventoryBatchId === 'object' ? o.inventoryBatchId : null;
     return (
+      formatOrderRef(o._id).toLowerCase().includes(q) ||
       o._id.toLowerCase().includes(q) ||
       o.destination.toLowerCase().includes(q) ||
       (client?.name ?? '').toLowerCase().includes(q) ||
-      (batch?.category ?? '').includes(q)
+      productName(o).toLowerCase().includes(q)
     );
   });
 
-  const handleAccept = async (id: string) => {
-    setBusyId(id);
-    try { await acceptOrder(id); } catch {/**/}
-    setBusyId(null);
-  };
+  const awaitingPayment = orders.filter((o) => o.orderStatus === 'pending' && o.paymentStatus !== 'paid').length;
+  const readyToAccept   = orders.filter((o) => o.orderStatus === 'pending' && o.paymentStatus === 'paid').length;
+  const inProgress      = orders.filter((o) => ['accepted', 'packaged', 'shipped'].includes(normalizeOrderStatus(o.orderStatus))).length;
+  const delivered       = orders.filter((o) => o.orderStatus === 'delivered').length;
+  const totalOrders     = pagination?.total ?? orders.length;
+  const showInitialSpinner = isLoading && orders.length === 0;
 
-  const handleReject = async (id: string) => {
-    setBusyId(id);
-    try { await rejectOrder(id); setRejectConfirmId(null); } catch {/**/}
-    setBusyId(null);
+  const renderPaymentNote = (order: Order) => {
+    if (needsManualRefund(order)) {
+      return (
+        <p className="text-xs text-amber-300 flex items-center gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5" /> Paid but cancelled — refunds are not automated; arrange it with the client.
+        </p>
+      );
+    }
+    return null;
   };
-
-  const handleAdvance = async (id: string, status: OrderStatus) => {
-    setBusyId(id);
-    try { await updateOrderStatus(id, status); } catch {/**/}
-    setBusyId(null);
-  };
-
-  // ── Stats ────────────────────────────────────────────────────────────────────
-  const pending   = orders.filter((o) => o.orderStatus === 'pending').length;
-  const active    = orders.filter((o) => ['accepted', 'packed', 'shipped'].includes(o.orderStatus)).length;
-  const delivered = orders.filter((o) => o.orderStatus === 'delivered').length;
-  const revenue   = orders
-    .filter((o) => o.orderStatus === 'delivered')
-    .reduce((s, o) => s + o.totalAmount, 0);
-  const totalOrders = pagination?.total ?? orders.length;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -100,36 +162,30 @@ const FarmerOrders: React.FC = () => {
             {totalOrders} total order{totalOrders !== 1 ? 's' : ''} on your inventory
           </p>
         </div>
-        {pending > 0 && (
-          <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
-            <AlertCircle className="w-4 h-4 text-amber-400 animate-pulse" />
-            <span className="text-amber-300 text-sm font-medium">{pending} pending action{pending > 1 ? 's' : ''}</span>
+        {readyToAccept > 0 && (
+          <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-3 py-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <span className="text-emerald-300 text-sm font-medium">
+              {readyToAccept} paid order{readyToAccept > 1 ? 's' : ''} ready to accept
+            </span>
           </div>
         )}
       </div>
 
       {/* ── Stats Grid ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <FarmerStatCard
-          label="Pending" value={pending}
+        <FarmerStatCard label="Awaiting Payment" value={awaitingPayment}
           icon={<Clock className="w-4 h-4 text-amber-400" />}
-          colorClass="text-amber-400" bgClass="bg-amber-500/10 border-amber-500/20"
-        />
-        <FarmerStatCard
-          label="In Progress" value={active}
+          colorClass="text-amber-400" bgClass="bg-amber-500/10 border-amber-500/20" />
+        <FarmerStatCard label="Paid · Ready to Accept" value={readyToAccept}
+          icon={<CreditCard className="w-4 h-4 text-emerald-400" />}
+          colorClass="text-emerald-400" bgClass="bg-emerald-500/10 border-emerald-500/20" />
+        <FarmerStatCard label="In Progress" value={inProgress}
           icon={<Truck className="w-4 h-4 text-blue-400" />}
-          colorClass="text-blue-400" bgClass="bg-blue-500/10 border-blue-500/20"
-        />
-        <FarmerStatCard
-          label="Delivered" value={delivered}
+          colorClass="text-blue-400" bgClass="bg-blue-500/10 border-blue-500/20" />
+        <FarmerStatCard label="Delivered" value={delivered}
           icon={<CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-          colorClass="text-emerald-400" bgClass="bg-emerald-500/10 border-emerald-500/20"
-        />
-        <FarmerStatCard
-          label="Revenue (Delivered)" value={formatCurrency(revenue)}
-          icon={<TrendingUp className="w-4 h-4 text-emerald-400" />}
-          colorClass="text-emerald-400" bgClass="bg-emerald-500/10 border-emerald-500/20"
-        />
+          colorClass="text-emerald-400" bgClass="bg-emerald-500/10 border-emerald-500/20" />
       </div>
 
       {/* ── Filters ─────────────────────────────────────────────────────────── */}
@@ -140,8 +196,9 @@ const FarmerOrders: React.FC = () => {
             id="farmer-order-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by client, category, destination…"
+            placeholder="Search by order #, client, product, destination…"
             className="input-field pl-10"
+            aria-label="Search orders"
           />
         </div>
         <select
@@ -149,235 +206,223 @@ const FarmerOrders: React.FC = () => {
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
           className="select-field w-44"
+          aria-label="Filter by order status"
         >
           <option value="">All Statuses</option>
-          {(['pending', 'accepted', 'packed', 'shipped', 'delivered', 'cancelled'] as OrderStatus[]).map((s) => (
-            <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+          {ORDER_STATUS_FILTERS.map((s) => (
+            <option key={s} value={s}>{ORDER_STATUS_LABEL[s]}</option>
           ))}
         </select>
       </div>
 
       {/* ── Error Banner ────────────────────────────────────────────────────── */}
       {error && (
-        <div className="glass-card p-4 border border-red-500/30 bg-red-500/10 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
-          <p className="text-red-300 text-sm">{error}</p>
+        <div className="glass-card p-4 border border-red-500/30 bg-red-500/10 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+            <p className="text-red-300 text-sm">{error}</p>
+          </div>
+          <button onClick={load} className="btn-secondary text-xs py-1.5 px-3 shrink-0">
+            <RefreshCw className="w-3.5 h-3.5" /> Retry
+          </button>
         </div>
       )}
 
       {/* ── Order Cards ─────────────────────────────────────────────────────── */}
-      {isLoading ? (
+      {showInitialSpinner ? (
         <LoadingSpinner className="py-20" size="lg" />
       ) : (
         <div className="space-y-4">
           {filtered.length === 0 ? (
             <div className="glass-card empty-state py-20">
               <Package className="w-12 h-12 mb-3 opacity-20" />
-              <p className="text-slate-400">No orders found</p>
-              {filterStatus && (
-                <button onClick={() => setFilterStatus('')} className="mt-3 btn-secondary text-xs">
-                  Clear filter
+              <p className="text-slate-400">{search || filterStatus ? 'No orders match your filters' : 'No orders yet'}</p>
+              {(filterStatus || search) && (
+                <button onClick={() => { setFilterStatus(''); setSearch(''); }} className="mt-3 btn-secondary text-xs">
+                  Clear filters
                 </button>
               )}
             </div>
           ) : filtered.map((order) => {
             const client = typeof order.clientId === 'object' ? order.clientId : null;
-            const batch  = typeof order.inventoryBatchId === 'object' ? order.inventoryBatchId : null;
+            const actionable = order.orderStatus === 'pending' && order.paymentStatus === 'paid';
 
             return (
-              <div
+              <article
                 key={order._id}
+                data-testid={`farmer-order-${order._id}`}
                 className={`glass-card p-5 transition-all duration-200 hover:border-slate-600/70 ${
-                  order.orderStatus === 'pending' ? 'border-amber-500/30 bg-amber-500/3' : ''
+                  actionable ? 'border-emerald-500/30' : ''
                 }`}
               >
-                {/* ── Order Header ───────────────────────────────────────── */}
-                <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-xl bg-slate-700/50 flex items-center justify-center text-2xl">
-                      {getCategoryIcon(batch?.category ?? 'fresh')}
+                {/* Header */}
+                <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-11 h-11 rounded-xl bg-slate-700/50 flex items-center justify-center shrink-0">
+                      <Package className="w-5 h-5 text-slate-300" />
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-bold text-slate-200 capitalize">
-                          {batch?.category ?? 'Onion'} Onions
-                        </p>
-                        {order.orderStatus === 'pending' && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
-                            NEW
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 font-mono">#{order._id.slice(-10)}</p>
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-100 font-mono tracking-tight">Order {formatOrderRef(order._id)}</p>
+                      <p className="text-sm text-slate-400 truncate">{productName(order)}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {STATUS_ICON[order.orderStatus]}
-                    <Badge label={order.orderStatus} />
-                    <Badge label={order.paymentStatus} />
-                  </div>
+                  <OrderStatusPair orderStatus={order.orderStatus} paymentStatus={order.paymentStatus} />
                 </div>
 
-                {/* ── Details Grid ──────────────────────────────────────── */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4 text-sm">
+                {/* Details */}
+                <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4 text-sm">
                   <div>
-                    <p className="text-slate-500 text-xs flex items-center gap-1">
-                      <Users className="w-3 h-3" /> Client
-                    </p>
-                    <p className="font-semibold text-slate-200 truncate">{client?.name ?? '—'}</p>
-                    <p className="text-xs text-slate-500 truncate">{client?.email ?? ''}</p>
+                    <dt className="text-slate-500 text-xs flex items-center gap-1"><Scale className="w-3 h-3" /> Quantity</dt>
+                    <dd className="font-semibold text-slate-200">{formatWeight(order.quantityKg)}</dd>
                   </div>
                   <div>
-                    <p className="text-slate-500 text-xs">Quantity</p>
-                    <p className="font-semibold text-slate-200">{formatWeight(order.quantityKg)}</p>
+                    <dt className="text-slate-500 text-xs flex items-center gap-1"><IndianRupee className="w-3 h-3" /> Amount</dt>
+                    <dd className="font-semibold text-emerald-400">{formatCurrency(order.totalAmount)}</dd>
                   </div>
-                  <div>
-                    <p className="text-slate-500 text-xs">Amount</p>
-                    <p className="font-semibold text-emerald-400">{formatCurrency(order.totalAmount)}</p>
+                  <div className="min-w-0">
+                    <dt className="text-slate-500 text-xs flex items-center gap-1"><Users className="w-3 h-3" /> Client</dt>
+                    <dd className="font-semibold text-slate-200 truncate">{client?.name ?? '—'}</dd>
                   </div>
-                  <div>
-                    <p className="text-slate-500 text-xs">Destination</p>
-                    <p className="font-semibold text-slate-200 truncate">{order.destination}</p>
+                  <div className="min-w-0">
+                    <dt className="text-slate-500 text-xs flex items-center gap-1"><MapPin className="w-3 h-3" /> Destination</dt>
+                    <dd className="font-semibold text-slate-200 truncate">{order.destination}</dd>
                   </div>
-                </div>
+                </dl>
 
-                {/* ── Footer ───────────────────────────────────────────── */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-700/40">
+                {renderPaymentNote(order)}
+
+                {/* Footer */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-3 mt-3 border-t border-slate-700/40">
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-slate-500">{formatDate(order.createdAt)}</span>
                     <button
                       id={`farmer-view-${order._id}`}
-                      onClick={() => setSelectedOrder(order)}
-                      className="text-xs text-slate-400 hover:text-slate-200 transition-colors underline underline-offset-2"
+                      onClick={() => openOrder(order._id)}
+                      className="btn-secondary text-xs py-1.5 px-3"
                     >
                       View Details
                     </button>
                   </div>
-                  <div className="flex gap-2">
-                    <OrderActions
-                      order={order}
-                      onAccept={handleAccept}
-                      onReject={(id) => setRejectConfirmId(id)}
-                      onAdvance={handleAdvance}
-                      busyId={busyId}
-                    />
-                  </div>
+                  <OrderActions
+                    order={order}
+                    onAccept={handleAccept}
+                    onCancel={setConfirmCancel}
+                    onAdvance={handleAdvance}
+                    busy={busyIds.has(order._id)}
+                  />
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
       )}
 
-      {/* ══════ DETAIL MODAL ════════════════════════════════════════════════════ */}
-      <Modal isOpen={!!selectedOrder} onClose={() => setSelectedOrder(null)} title="Order Details" size="lg">
-        {selectedOrder && (() => {
+      {/* ══════ DETAIL MODAL (deep-linkable) ═══════════════════════════════════ */}
+      <Modal isOpen={!!orderId} onClose={closeOrder} title={selectedOrder ? `Order ${formatOrderRef(selectedOrder._id)}` : 'Order Details'} size="lg">
+        {!selectedOrder ? (
+          <LoadingSpinner className="py-12" size="md" />
+        ) : (() => {
           const client = typeof selectedOrder.clientId === 'object' ? selectedOrder.clientId : null;
-          const batch  = typeof selectedOrder.inventoryBatchId === 'object' ? selectedOrder.inventoryBatchId : null;
-          const next   = NEXT_STATUS[selectedOrder.orderStatus];
           return (
             <div className="space-y-5">
-              <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-700/30 border border-slate-600/30">
-                <span className="text-5xl">{getCategoryIcon(batch?.category ?? 'fresh')}</span>
-                <div className="flex-1">
-                  <h2 className="text-xl font-bold text-slate-100 capitalize">{batch?.category ?? 'Onion'} Onions</h2>
-                  <p className="text-xs text-slate-500 font-mono mt-0.5">#{selectedOrder._id}</p>
-                  <div className="flex items-center gap-2 mt-2">
-                    <Badge label={selectedOrder.orderStatus} />
-                    <Badge label={selectedOrder.paymentStatus} />
-                  </div>
-                </div>
+              <div className="p-4 rounded-2xl bg-slate-700/30 border border-slate-600/30 space-y-3">
+                <p className="text-lg font-bold text-slate-100">{productName(selectedOrder)}</p>
+                <OrderStatusPair orderStatus={selectedOrder.orderStatus} paymentStatus={selectedOrder.paymentStatus} />
+                {renderPaymentNote(selectedOrder)}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="p-4 rounded-xl bg-slate-700/20">
+                <p className="text-xs text-slate-500 mb-3 uppercase tracking-wider font-semibold">Progress</p>
+                <OrderProgress order={selectedOrder} showTimestamps />
+              </div>
+
+              <dl className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'Client Name', value: client?.name ?? '—', icon: '👤' },
-                  { label: 'Client Email', value: client?.email ?? '—', icon: '📧' },
-                  { label: 'Quantity', value: formatWeight(selectedOrder.quantityKg), icon: '📦' },
-                  { label: 'Total Amount', value: formatCurrency(selectedOrder.totalAmount), icon: '💰' },
-                  { label: 'Destination', value: selectedOrder.destination, icon: '📍' },
-                  { label: 'Ordered On', value: formatDate(selectedOrder.createdAt), icon: '📅' },
+                  { label: 'Client', value: client?.name ?? '—', icon: <Users className="w-3.5 h-3.5" /> },
+                  { label: 'Client Email', value: client?.email ?? '—', icon: <Users className="w-3.5 h-3.5" /> },
+                  { label: 'Quantity', value: formatWeight(selectedOrder.quantityKg), icon: <Scale className="w-3.5 h-3.5" /> },
+                  { label: 'Amount', value: formatCurrency(selectedOrder.totalAmount), icon: <IndianRupee className="w-3.5 h-3.5" /> },
+                  { label: 'Destination', value: selectedOrder.destination, icon: <MapPin className="w-3.5 h-3.5" /> },
+                  { label: 'Ordered On', value: formatDate(selectedOrder.createdAt), icon: <CalendarDays className="w-3.5 h-3.5" /> },
                 ].map(({ label, value, icon }) => (
                   <div key={label} className="p-3 rounded-xl bg-slate-700/30 border border-slate-600/20">
-                    <p className="text-xs text-slate-500 mb-1">{icon} {label}</p>
-                    <p className="font-semibold text-slate-200 text-sm break-all">{value}</p>
+                    <dt className="text-xs text-slate-500 mb-1 flex items-center gap-1">{icon} {label}</dt>
+                    <dd className="font-semibold text-slate-200 text-sm break-all">{value}</dd>
                   </div>
                 ))}
-              </div>
+              </dl>
 
               {selectedOrder.notes && (
                 <div className="p-4 rounded-xl bg-slate-700/20">
-                  <p className="text-xs text-slate-500 mb-2">📝 Client Notes</p>
+                  <p className="text-xs text-slate-500 mb-2">Client Notes</p>
                   <p className="text-slate-300 text-sm leading-relaxed">{selectedOrder.notes}</p>
                 </div>
               )}
 
-              <div className="flex justify-end gap-3 pt-2">
-                <button onClick={() => setSelectedOrder(null)} className="btn-secondary">Close</button>
-                {selectedOrder.orderStatus === 'pending' && (
-                  <>
-                    <button
-                      onClick={() => { setSelectedOrder(null); setRejectConfirmId(selectedOrder._id); }}
-                      className="btn-secondary gap-2 text-red-400 hover:text-red-300 border-red-500/20 hover:bg-red-500/10"
-                    >
-                      <XCircle className="w-4 h-4" /> Reject
-                    </button>
-                    <button
-                      onClick={() => { handleAccept(selectedOrder._id); setSelectedOrder(null); }}
-                      className="btn-primary gap-2"
-                    >
-                      <CheckCircle2 className="w-4 h-4" /> Accept
-                    </button>
-                  </>
-                )}
-                {next && selectedOrder.orderStatus !== 'pending' && (
-                  <button
-                    onClick={() => { handleAdvance(selectedOrder._id, next); setSelectedOrder(null); }}
-                    className="btn-primary gap-2"
-                  >
-                    <ChevronDown className="w-4 h-4" />
-                    {NEXT_STATUS_LABEL[selectedOrder.orderStatus]}
-                  </button>
-                )}
+              <div className="flex flex-wrap justify-between items-center gap-3 pt-2">
+                <button onClick={closeOrder} className="btn-secondary">Close</button>
+                <OrderActions
+                  order={selectedOrder}
+                  onAccept={handleAccept}
+                  onCancel={setConfirmCancel}
+                  onAdvance={handleAdvance}
+                  busy={busyIds.has(selectedOrder._id)}
+                />
               </div>
             </div>
           );
         })()}
+        {deepLinkLoading && <span className="sr-only">Loading order</span>}
       </Modal>
 
-      {/* ══════ REJECT CONFIRM MODAL ════════════════════════════════════════════ */}
+      {/* ══════ REJECT / CANCEL CONFIRM ═════════════════════════════════════════ */}
       <Modal
-        isOpen={!!rejectConfirmId}
-        onClose={() => setRejectConfirmId(null)}
-        title="Reject Order"
+        isOpen={!!confirmCancel}
+        onClose={() => { if (!confirmCancel || !busyIds.has(confirmCancel._id)) setConfirmCancel(null); }}
+        title={confirmCancel && normalizeOrderStatus(confirmCancel.orderStatus) === 'pending' ? 'Reject Order' : 'Cancel Order'}
         size="sm"
       >
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/10 border border-red-500/20">
-            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold text-slate-200 text-sm">Reject this order?</p>
-              <p className="text-slate-400 text-xs mt-1">
-                The stock will be restored and the client will be notified.
-                This cannot be undone.
-              </p>
+        {confirmCancel && (() => {
+          const status = normalizeOrderStatus(confirmCancel.orderStatus);
+          const busy = busyIds.has(confirmCancel._id);
+          return (
+            <div className="space-y-4">
+              <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/10 border border-red-500/20">
+                <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-slate-400 space-y-1.5">
+                  <p className="font-semibold text-slate-200 text-sm">
+                    {status === 'pending' ? 'Reject' : 'Cancel'} order {formatOrderRef(confirmCancel._id)}?
+                  </p>
+                  <p>
+                    {status === 'shipped'
+                      ? 'The goods have already shipped, so the quantity will NOT be returned to your stock.'
+                      : `${formatWeight(confirmCancel.quantityKg)} will be returned to your available stock.`}{' '}
+                    The client will be notified. This cannot be undone.
+                  </p>
+                  {confirmCancel.paymentStatus === 'paid' && (
+                    <p className="text-amber-300">
+                      This order is paid. Refunds are not automated — you will need to arrange the refund with the client.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setConfirmCancel(null)} className="btn-secondary" disabled={busy}>
+                  Keep order
+                </button>
+                <button
+                  id={`confirm-cancel-${confirmCancel._id}`}
+                  onClick={handleConfirmCancel}
+                  disabled={busy}
+                  className="btn-primary bg-red-600 hover:bg-red-500 border-red-500/50 gap-2"
+                >
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+                  {busy ? 'Working…' : status === 'pending' ? 'Yes, reject' : 'Yes, cancel'}
+                </button>
+              </div>
             </div>
-          </div>
-          <div className="flex justify-end gap-3">
-            <button onClick={() => setRejectConfirmId(null)} className="btn-secondary" disabled={!!busyId}>
-              Keep it
-            </button>
-            <button
-              id={`confirm-reject-${rejectConfirmId}`}
-              onClick={() => rejectConfirmId && handleReject(rejectConfirmId)}
-              disabled={!!busyId}
-              className="btn-primary bg-red-600 hover:bg-red-500 border-red-500/50 gap-2"
-            >
-              {busyId ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-              {busyId ? 'Rejecting…' : 'Yes, Reject'}
-            </button>
-          </div>
-        </div>
+          );
+        })()}
       </Modal>
     </div>
   );

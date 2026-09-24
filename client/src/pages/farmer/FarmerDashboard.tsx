@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Package, TrendingUp, ShoppingCart, Leaf, MapPin } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -123,7 +124,7 @@ const FarmerDashboard: React.FC = () => {
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-5">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Recent Batches</h3>
-            <a href="/farmer/inventory" className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Manage →</a>
+            <Link to="/farmer/inventory" className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Manage →</Link>
           </div>
           {batches.length === 0 ? (
             <div className="empty-state text-sm">No batches yet</div>
@@ -152,7 +153,7 @@ const FarmerDashboard: React.FC = () => {
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-5">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Recent Orders</h3>
-            <a href="/farmer/orders" className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">View all →</a>
+            <Link to="/farmer/orders" className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">View all →</Link>
           </div>
           {orders.length === 0 ? (
             <div className="empty-state text-sm">No orders received yet</div>

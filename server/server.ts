@@ -24,16 +24,15 @@ const startServer = async () => {
   initSocket(httpServer);
 
   // ─── Bind HTTP port FIRST so the server is reachable immediately ────────────
-  await new Promise<void>((resolve) => {
-    httpServer.listen(PORT, () => {
-      logger.info(
-        { port: PORT, env: env.NODE_ENV, url: `http://localhost:${PORT}` },
-        "✅ AgroLoop API Server running"
-      );
-      resolve();
-    });
+await new Promise<void>((resolve) => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    logger.info(
+      { port: PORT, env: env.NODE_ENV, url: `http://localhost:${PORT}` },
+      "✅ AgroLoop API Server running"
+    );
+    resolve();
   });
-
+});
   // ─── Connect to MongoDB (with retry) after port is bound ────────────────────
   await connectDB();
 

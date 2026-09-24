@@ -1,11 +1,12 @@
 import React, { useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { ShoppingCart, Package, CheckCircle, Wallet, Clock } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { useOrderStore } from '../../stores/order.store';
 import StatCard from '../../components/common/StatCard';
-import Badge from '../../components/common/Badge';
+import { OrderStatusBadge } from '../../components/orders/StatusBadges';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
 
@@ -14,12 +15,13 @@ const ClientDashboard: React.FC = () => {
 
   useEffect(() => { fetchOrders({ limit: 50 }); }, [fetchOrders]);
 
+  // Spending = what was actually paid; unpaid or cancelled orders are not spend.
   const totalSpent  = orders.filter(o => o.paymentStatus === 'paid').reduce((s, o) => s + o.totalAmount, 0);
-  const pendingPayments = orders.filter(o => ['accepted', 'packed', 'shipped', 'delivered'].includes(o.orderStatus) && o.paymentStatus === 'pending').length;
+  const pendingPayments = orders.filter(o => o.orderStatus !== 'cancelled' && o.paymentStatus !== 'paid').length;
   const completedPayments = orders.filter(o => o.paymentStatus === 'paid').length;
   const totalKg     = orders.reduce((s, o) => s + o.quantityKg, 0);
 
-  const chartData = orders.slice(0, 7).reverse().map(o => ({
+  const chartData = orders.filter(o => o.paymentStatus === 'paid').slice(0, 7).reverse().map(o => ({
     date: formatDate(o.createdAt),
     amount: o.totalAmount,
   }));
@@ -62,13 +64,13 @@ const ClientDashboard: React.FC = () => {
       <div className="glass-card p-6">
         <div className="flex items-center justify-between mb-5">
           <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">My Recent Orders</h3>
-          <a href="/client/orders" className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">View all →</a>
+          <Link to="/client/orders" className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">View all →</Link>
         </div>
         {orders.length === 0 ? (
           <div className="empty-state">
             <ShoppingCart className="w-12 h-12 mb-3 opacity-20" />
             <p>No orders yet.</p>
-            <a href="/client/browse" className="mt-3 btn-primary text-sm">Browse Inventory</a>
+            <Link to="/client/browse" className="mt-3 btn-primary text-sm">Browse Inventory</Link>
           </div>
         ) : (
           <div className="space-y-3">
@@ -86,7 +88,7 @@ const ClientDashboard: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1.5">
-                    <Badge label={order.orderStatus} />
+                    <OrderStatusBadge status={order.orderStatus} />
                     <span className="text-sm font-semibold text-slate-300">{formatCurrency(order.totalAmount)}</span>
                   </div>
                 </div>
