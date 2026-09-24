@@ -32,6 +32,9 @@
 
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    // Tests use dev-only packages (vitest, mongodb-memory-server) that are not
+    // installed in production builds. They are typechecked via tsconfig.test.json.
+    "src/tests"
   ]
 }
