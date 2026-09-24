@@ -1,10 +1,20 @@
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 import Order, { OrderDocument } from "../models/Order.model";
 import InventoryBatch from "../models/InventoryBatch.model";
-import Notification from "../models/Notification.model";
 import { ApiError } from "../utils/ApiError";
-import { OrderStatus, PaginationMeta } from "../types";
+import {
+  OrderStatus,
+  PaginationMeta,
+  UserRole,
+  LEGACY_PACKAGED_STATUS,
+} from "../types";
 import { getIO } from "../socket/socket";
+import { logger } from "../config/logger";
+import {
+  notify,
+  emitOrderUpdated,
+  formatOrderRef,
+} from "./notification.service";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -29,37 +39,301 @@ interface OrderListResult {
   pagination: PaginationMeta;
 }
 
+export interface Actor {
+  id: string;
+  role: UserRole;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Safely emit a socket event — never throws */
-const emit = (room: string, event: string, payload: unknown): void => {
+/** Emit inventory refresh to all connected clients — never throws. */
+const emitInventoryRefresh = (): void => {
   try {
-    getIO().to(room).emit(event, payload);
+    getIO().to("broadcast:inventory").emit("inventory:refresh", { timestamp: Date.now() });
   } catch {
-    // Socket.IO not critical
+    // Socket.IO not initialised (tests/scripts) — not critical.
   }
 };
 
-/** Emit inventory refresh to all connected clients */
-const emitInventoryRefresh = (): void => {
-  emit("broadcast:inventory", "inventory:refresh", { timestamp: Date.now() });
+/** Documents written by older versions may still hold "packed". */
+const normalizeStatus = (status: string): OrderStatus =>
+  (status === LEGACY_PACKAGED_STATUS ? "packaged" : status) as OrderStatus;
+
+/** Stored values that represent a given logical status. */
+const storedValuesFor = (status: OrderStatus): string[] =>
+  status === "packaged" ? ["packaged", LEGACY_PACKAGED_STATUS] : [status];
+
+const ORDER_POPULATE = [
+  { path: "clientId", select: "name email" },
+  { path: "inventoryBatchId", select: "category quantityKg pricePerKg location farmerId" },
+];
+
+/** Resolves the farmer who owns the batch an order was placed against. */
+const getOrderFarmerId = async (
+  inventoryBatchId: Types.ObjectId
+): Promise<string | null> => {
+  const batch = await InventoryBatch.findById(inventoryBatchId).select("farmerId").lean();
+  return batch ? batch.farmerId.toString() : null;
 };
 
-// ─── Status transition map (farmer-allowed progressions) ──────────────────────
-const FARMER_STATUS_PROGRESSION: Record<string, OrderStatus> = {
-  accepted: "packed",
-  packed: "shipped",
-  shipped: "delivered",
+/**
+ * Throws unless the actor may see the order: the owning client, the farmer
+ * who owns the batch, or an admin. Shared by order and payment endpoints.
+ */
+export const assertOrderAccess = async (
+  order: { clientId: Types.ObjectId | { _id: Types.ObjectId }; inventoryBatchId: Types.ObjectId | { _id: Types.ObjectId } },
+  actor: Actor
+): Promise<void> => {
+  if (actor.role === "admin") return;
+
+  const idOf = (v: Types.ObjectId | { _id: Types.ObjectId }) =>
+    ("_id" in v ? v._id : v).toString();
+
+  if (actor.role === "client") {
+    if (idOf(order.clientId) !== actor.id) throw ApiError.forbidden("Access denied");
+    return;
+  }
+
+  const farmerId = await getOrderFarmerId(
+    new Types.ObjectId(idOf(order.inventoryBatchId))
+  );
+  if (farmerId !== actor.id) throw ApiError.forbidden("Access denied");
+};
+
+/**
+ * Atomically returns stock to a batch. A single pipeline update adds the
+ * quantity back and re-opens the batch if it had been marked reserved/sold,
+ * so there is no read-modify-write window for concurrent orders to race.
+ */
+const restoreStock = async (batchId: Types.ObjectId, quantityKg: number): Promise<void> => {
+  await InventoryBatch.updateOne(
+    { _id: batchId },
+    [
+      { $set: { quantityKg: { $add: ["$quantityKg", quantityKg] } } },
+      {
+        $set: {
+          status: {
+            $cond: [
+              {
+                $and: [
+                  { $in: ["$status", ["reserved", "sold"]] },
+                  { $gt: ["$quantityKg", 0] },
+                ],
+              },
+              "available",
+              "$status",
+            ],
+          },
+        },
+      },
+    ],
+    { updatePipeline: true }
+  );
+};
+
+// ─── Order state machine ──────────────────────────────────────────────────────
+
+interface TransitionRule {
+  /** Statuses the order may currently be in. */
+  from: OrderStatus[];
+  /** Roles allowed to perform the transition. */
+  roles: UserRole[];
+  /** Fulfilment steps are only allowed once the payment is verified. */
+  requiresPaid: boolean;
+}
+
+/**
+ * The only order status transitions the API accepts. Anything not listed
+ * here (e.g. PENDING → PACKAGED, DELIVERED → anything) is rejected.
+ *
+ *   PENDING → ACCEPTED → PACKAGED → SHIPPED → DELIVERED
+ *   PENDING | ACCEPTED | PACKAGED | SHIPPED → CANCELLED
+ *
+ * Payment status is tracked separately; it is never derived from, nor does
+ * it drive, the order status.
+ */
+const TRANSITIONS: Partial<Record<OrderStatus, TransitionRule>> = {
+  accepted:  { from: ["pending"],  roles: ["farmer"], requiresPaid: true },
+  packaged:  { from: ["accepted"], roles: ["farmer"], requiresPaid: true },
+  shipped:   { from: ["packaged"], roles: ["farmer"], requiresPaid: true },
+  delivered: { from: ["shipped"],  roles: ["farmer"], requiresPaid: true },
+  cancelled: {
+    from: ["pending", "accepted", "packaged", "shipped"],
+    roles: ["client", "farmer", "admin"],
+    requiresPaid: false,
+  },
+};
+
+/** Once goods have left the farm, cancelling must not put them back in stock. */
+const STOCK_RESTORED_ON_CANCEL_FROM: OrderStatus[] = ["pending", "accepted", "packaged"];
+
+const CLIENT_MESSAGES: Partial<Record<OrderStatus, (ref: string) => { title: string; message: string }>> = {
+  accepted:  (ref) => ({ title: "Order Accepted",  message: `Your order ${ref} has been accepted by the farmer.` }),
+  packaged:  (ref) => ({ title: "Order Packaged",  message: `Your order ${ref} has been packaged.` }),
+  shipped:   (ref) => ({ title: "Order Shipped",   message: `Your order ${ref} has been shipped.` }),
+  delivered: (ref) => ({ title: "Order Delivered", message: `Your order ${ref} has been delivered.` }),
+};
+
+interface TransitionOptions {
+  /** Further restricts the allowed source statuses (e.g. "reject" = pending only). */
+  onlyFrom?: OrderStatus[];
+}
+
+/**
+ * The single, controlled way to change an order's status.
+ *
+ * 1. Authorises the actor against the order (owner client / owning farmer / admin).
+ * 2. Validates the transition against TRANSITIONS — the requested target is
+ *    never trusted on its own.
+ * 3. Applies it with a conditional findOneAndUpdate on the *current* status
+ *    (and payment status where required). Two concurrent requests cannot both
+ *    succeed, so side effects such as restoring stock run at most once.
+ * 4. Performs inventory side effects, persists notifications and emits
+ *    `order:updated` so both parties re-fetch from the API.
+ */
+export const transitionOrder = async (
+  orderId: string,
+  actor: Actor,
+  to: OrderStatus,
+  options: TransitionOptions = {}
+): Promise<OrderDocument> => {
+  if (!mongoose.isValidObjectId(orderId)) throw ApiError.badRequest("Invalid order ID");
+
+  const rule = TRANSITIONS[to];
+  if (!rule) throw ApiError.badRequest(`'${to}' is not a status an order can be moved to`);
+
+  const order = await Order.findById(orderId).lean();
+  if (!order) throw ApiError.notFound("Order not found");
+
+  if (!rule.roles.includes(actor.role)) {
+    throw ApiError.forbidden(`A ${actor.role} cannot move an order to '${to}'`);
+  }
+  await assertOrderAccess(order, actor);
+
+  const current = normalizeStatus(order.orderStatus);
+  const allowedFrom = options.onlyFrom
+    ? rule.from.filter((s) => options.onlyFrom!.includes(s))
+    : actor.role === "client"
+      ? ["pending" as OrderStatus] // clients may only cancel before the farmer accepts
+      : rule.from;
+
+  if (!allowedFrom.includes(current)) {
+    throw ApiError.badRequest(`Cannot move order from '${current}' to '${to}'`);
+  }
+
+  if (rule.requiresPaid && order.paymentStatus !== "paid") {
+    throw ApiError.badRequest(
+      `Payment has not been received for this order (payment status: '${order.paymentStatus}'). ` +
+        `It cannot be moved to '${to}' until the payment is verified.`
+    );
+  }
+
+  // Refunds are not automated. Don't let a client create a refund obligation
+  // on their own — a paid order has to be cancelled by the farmer or an admin.
+  if (to === "cancelled" && actor.role === "client" && order.paymentStatus === "paid") {
+    throw ApiError.badRequest(
+      "This order has already been paid. Please contact the farmer to cancel it and arrange a refund."
+    );
+  }
+
+  // Conditional on the status we validated against: if anything changed in
+  // between, the update matches nothing and we report a conflict.
+  const guard: Record<string, unknown> = {
+    _id: order._id,
+    orderStatus: { $in: storedValuesFor(current) },
+  };
+  if (rule.requiresPaid) guard.paymentStatus = "paid";
+
+  const updated = await Order.findOneAndUpdate(
+    guard,
+    {
+      $set: {
+        orderStatus: to,
+        ...(to === "cancelled" && { cancelledBy: actor.role }),
+      },
+      $push: { statusHistory: { status: to, at: new Date(), by: actor.role } },
+    },
+    { returnDocument: "after" }
+  );
+
+  if (!updated) {
+    throw ApiError.conflict(
+      "This order was changed by another request. Refresh and try again."
+    );
+  }
+
+  // ── Inventory side effects ────────────────────────────────────────────────
+  let stockRestored = false;
+  if (to === "cancelled" && STOCK_RESTORED_ON_CANCEL_FROM.includes(current)) {
+    try {
+      await restoreStock(order.inventoryBatchId, order.quantityKg);
+      stockRestored = true;
+    } catch (err) {
+      // The order is already cancelled; surface the inconsistency loudly.
+      logger.error(
+        { err, orderId, batchId: order.inventoryBatchId, quantityKg: order.quantityKg },
+        "Order cancelled but restoring stock failed — manual correction required"
+      );
+    }
+  }
+
+  if (to === "delivered") {
+    // A fully drained batch whose last delivery completes becomes "sold".
+    await InventoryBatch.updateOne(
+      { _id: order.inventoryBatchId, status: "reserved", quantityKg: { $lte: 0 } },
+      { $set: { status: "sold" } }
+    );
+  }
+
+  // ── Notifications ────────────────────────────────────────────────────────
+  const ref = formatOrderRef(order._id);
+  const clientId = order.clientId.toString();
+  const farmerId = await getOrderFarmerId(order.inventoryBatchId);
+  const relatedId = order._id;
+
+  if (to === "cancelled") {
+    const refundNote =
+      order.paymentStatus === "paid"
+        ? " Your payment was received; refunds are not automatic — please contact the farmer to arrange one."
+        : "";
+
+    if (actor.role !== "client") {
+      await notify(clientId, {
+        type: current === "pending" ? "order_rejected" : "order_cancelled",
+        title: current === "pending" ? "Order Rejected" : "Order Cancelled",
+        message: `Your order ${ref} was ${current === "pending" ? "rejected" : "cancelled"} by the ${actor.role}.${refundNote}`,
+        relatedId,
+      });
+    }
+    if (actor.role !== "farmer" && farmerId) {
+      await notify(farmerId, {
+        type: "order_cancelled",
+        title: "Order Cancelled",
+        message: `Order ${ref} was cancelled by the ${actor.role}.`,
+        relatedId,
+      });
+    }
+  } else {
+    const content = CLIENT_MESSAGES[to];
+    if (content) {
+      await notify(clientId, { type: `order_${to}` as never, ...content(ref), relatedId });
+    }
+  }
+
+  emitOrderUpdated(order._id, farmerId ? [clientId, farmerId] : [clientId]);
+  if (stockRestored) emitInventoryRefresh();
+
+  return updated.populate(ORDER_POPULATE);
 };
 
 // ─── Service Functions ────────────────────────────────────────────────────────
 
 /**
  * Client places a new order.
- * - Atomically reserves stock using findOneAndUpdate (prevents race conditions)
- * - Creates the order document after stock is successfully reserved
+ * - Atomically reserves stock using findOneAndUpdate (prevents overselling)
+ * - Creates the order with orderStatus = pending, paymentStatus = pending
  * - Compensates by restoring stock if Order.create() fails
- * - Notifies farmer via socket + DB notification
+ * - Notifies the farmer that a new order is waiting for payment
  */
 export const createOrder = async (
   payload: CreateOrderPayload
@@ -67,17 +341,8 @@ export const createOrder = async (
   const { clientId, inventoryBatchId, quantityKg, destination, notes } = payload;
 
   // ── Step 1: Atomically reserve stock ─────────────────────────────────────────
-  // A single findOneAndUpdate that checks conditions AND decrements stock in
-  // one server-side operation. MongoDB guarantees no two concurrent requests
-  // can both satisfy the filter when stock is insufficient for both.
-  //
-  // Filter conditions (all enforced atomically by MongoDB):
-  //   • _id matches the requested batch
-  //   • status === "available"
-  //   • quantityKg >= requested quantity  ← this is the race-condition guard
-  //
-  // $inc ensures the decrement is atomic; it never sets quantity below 0
-  // because the filter rejects any document where quantityKg < requested.
+  // The filter and the decrement are evaluated as one server-side operation,
+  // so two concurrent requests can never both take the last units of stock.
   const updatedBatch = await InventoryBatch.findOneAndUpdate(
     {
       _id: new mongoose.Types.ObjectId(inventoryBatchId),
@@ -89,9 +354,7 @@ export const createOrder = async (
   );
 
   if (!updatedBatch) {
-    // The atomic update found no matching document. Determine the precise reason
-    // by reading the original batch (a non-critical diagnostic read — no stock
-    // has been modified at this point).
+    // No stock was modified — read the batch only to report the precise reason.
     const existingBatch = await InventoryBatch.findById(inventoryBatchId).lean();
     if (!existingBatch) throw ApiError.notFound("Inventory batch not found");
     if (existingBatch.status !== "available")
@@ -101,28 +364,19 @@ export const createOrder = async (
     );
   }
 
-  // ── Step 1b: Mark batch as "reserved" if stock just hit zero ─────────────────
-  // This second update is idempotent and purely cosmetic for business logic.
-  // Race-condition safety is already guaranteed by the $gte filter above —
-  // no further orders can pass through regardless of status, because 0 >= 1 fails.
+  // ── Step 1b: Mark batch as "reserved" once its stock is fully taken ─────────
   let stockDepleted = false;
   if (updatedBatch.quantityKg <= 0) {
     stockDepleted = true;
-    updatedBatch.quantityKg = 0; // safety floor on the local document
-    await InventoryBatch.findOneAndUpdate(
-      { _id: updatedBatch._id },
-      { $set: { quantityKg: 0, status: "reserved" } },
-      { runValidators: false }
+    await InventoryBatch.updateOne(
+      { _id: updatedBatch._id, quantityKg: { $lte: 0 } },
+      { $set: { quantityKg: 0, status: "reserved" } }
     );
-    updatedBatch.status = "reserved";
   }
 
   const totalAmount = quantityKg * updatedBatch.pricePerKg;
 
   // ── Step 2: Create the order document ────────────────────────────────────────
-  // Stock is already atomically reserved above. If Order.create() fails for any
-  // reason (validation error, DB outage, etc.), we compensate by restoring the
-  // decremented stock so inventory remains consistent.
   let order: OrderDocument;
   try {
     order = await Order.create({
@@ -133,295 +387,53 @@ export const createOrder = async (
       destination,
       notes,
       orderStatus: "pending",
+      paymentStatus: "pending",
+      statusHistory: [{ status: "pending", at: new Date(), by: "client" }],
     });
   } catch (err) {
-    // Compensating update: restore the quantity that was just decremented.
-    // Also restore status back to "available" if the batch was marked reserved
-    // due to this order draining the stock.
-    await InventoryBatch.findOneAndUpdate(
-      { _id: new mongoose.Types.ObjectId(inventoryBatchId) },
-      {
-        $inc: { quantityKg: quantityKg },
-        ...(stockDepleted && { $set: { status: "available" } }),
-      },
-      { runValidators: false }
-    );
+    logger.error({ err, inventoryBatchId, quantityKg }, "Order creation failed — restoring stock");
+    await restoreStock(updatedBatch._id, quantityKg);
     throw ApiError.internal(
       "Order creation failed due to a server error. Please try again."
     );
   }
 
-  // ── Notify farmer ────────────────────────────────────────────────────────────
-  const farmerRoom = `user:${updatedBatch.farmerId.toString()}`;
-  emit(farmerRoom, "notification:new", {
-    title: "🛒 New Order Received",
-    message: `Order #${String(order._id).slice(-6)} — ${quantityKg} kg of ${updatedBatch.category} onions`,
+  const farmerId = updatedBatch.farmerId.toString();
+  await notify(farmerId, {
     type: "order_placed",
-    orderId: order._id,
-  });
-
-  await Notification.create({
-    userId: updatedBatch.farmerId,
-    title: "New Order Received",
-    message: `A client placed an order for ${quantityKg} kg of your ${updatedBatch.category} onions.`,
-    type: "order_placed",
+    title: "New Order",
+    message: `New order ${formatOrderRef(order._id)} is waiting for payment (${quantityKg} kg of ${updatedBatch.category}).`,
     relatedId: order._id,
   });
+  emitOrderUpdated(order._id, [farmerId]);
 
-  // ── Notify all clients that inventory changed ────────────────────────────────
+  // Stock levels changed for everyone browsing inventory.
   emitInventoryRefresh();
+  if (stockDepleted) logger.info({ batchId: updatedBatch._id }, "Batch fully reserved");
 
-  return order.populate([
-    { path: "clientId", select: "name email" },
-    { path: "inventoryBatchId", select: "category quantityKg pricePerKg location farmerId" },
-  ]);
+  return order.populate(ORDER_POPULATE);
 };
+
+/** Client cancels their own PENDING, unpaid order. Stock is restored. */
+export const cancelOrder = (orderId: string, clientId: string) =>
+  transitionOrder(orderId, { id: clientId, role: "client" }, "cancelled");
+
+/** Farmer accepts a PENDING order. Requires the payment to be verified. */
+export const acceptOrder = (orderId: string, farmerId: string) =>
+  transitionOrder(orderId, { id: farmerId, role: "farmer" }, "accepted");
+
+/** Farmer rejects a PENDING order. Stock is restored. */
+export const rejectOrder = (orderId: string, farmerId: string) =>
+  transitionOrder(orderId, { id: farmerId, role: "farmer" }, "cancelled", {
+    onlyFrom: ["pending"],
+  });
 
 /**
- * Client cancels a PENDING order.
- * - Restores stock to the batch
- * - Emits inventory refresh
+ * Farmer (or admin, for cancellation) moves an order along its lifecycle.
+ * Validation is entirely server-side — see TRANSITIONS.
  */
-export const cancelOrder = async (
-  orderId: string,
-  clientId: string
-): Promise<OrderDocument> => {
-  const order = await Order.findById(orderId).populate("inventoryBatchId");
-  if (!order) throw ApiError.notFound("Order not found");
-
-  // Only the owner client can cancel
-  if (order.clientId.toString() !== clientId)
-    throw ApiError.forbidden("You can only cancel your own orders");
-
-  // Can only cancel if still pending
-  if (order.orderStatus !== "pending")
-    throw ApiError.badRequest(
-      `Cannot cancel an order that is already '${order.orderStatus}'. Contact the farmer.`
-    );
-
-  order.orderStatus = "cancelled";
-  await order.save();
-
-  // Restore stock
-  const batch = await InventoryBatch.findById(order.inventoryBatchId);
-  if (batch) {
-    batch.quantityKg += order.quantityKg;
-    // Restore to 'available' whenever stock exists — covers both the normal
-    // case (was 'reserved') and the edge case where Bug #1 had erroneously
-    // marked the batch as 'sold' before the fix.
-    if (batch.quantityKg > 0 && batch.status !== "expired") {
-      batch.status = "available";
-    }
-    await batch.save();
-  }
-
-  // Notify farmer
-  if (batch) {
-    emit(`user:${batch.farmerId.toString()}`, "notification:new", {
-      title: "Order Cancelled",
-      message: `Order #${orderId.slice(-6)} was cancelled by the client.`,
-      type: "order_cancelled",
-    });
-    await Notification.create({
-      userId: batch.farmerId,
-      title: "Order Cancelled",
-      message: `The client cancelled order #${orderId.slice(-6)} for ${order.quantityKg} kg.`,
-      type: "order_cancelled",
-      relatedId: order._id,
-    });
-  }
-
-  emitInventoryRefresh();
-
-  return order;
-};
-
-/**
- * Farmer accepts a pending order.
- * - Verifies the batch belongs to this farmer
- * - Sets status to 'accepted'
- * - Notifies client
- */
-export const acceptOrder = async (
-  orderId: string,
-  farmerId: string
-): Promise<OrderDocument> => {
-  const order = await Order.findById(orderId).populate("inventoryBatchId");
-  if (!order) throw ApiError.notFound("Order not found");
-
-  // Verify the batch belongs to this farmer
-  const batch = await InventoryBatch.findById(order.inventoryBatchId);
-  if (!batch) throw ApiError.notFound("Inventory batch not found");
-  if (batch.farmerId.toString() !== farmerId)
-    throw ApiError.forbidden("This order is not for your inventory");
-
-  if (order.orderStatus !== "pending")
-    throw ApiError.badRequest(
-      `Cannot accept an order in '${order.orderStatus}' status`
-    );
-
-  order.orderStatus = "accepted";
-  await order.save();
-
-  // Notify client
-  const clientRoom = `user:${order.clientId.toString()}`;
-  emit(clientRoom, "order:statusUpdate", {
-    orderId: order._id,
-    previousStatus: "pending",
-    newStatus: "accepted",
-    message: "Your order has been accepted by the farmer!",
-  });
-
-  await Notification.create({
-    userId: order.clientId,
-    title: "Order Accepted ✅",
-    message: "The farmer has accepted your order. It will be packed soon.",
-    type: "order_accepted",
-    relatedId: order._id,
-  });
-
-  return order.populate([
-    { path: "clientId", select: "name email" },
-    { path: "inventoryBatchId", select: "category quantityKg pricePerKg location" },
-  ]);
-};
-
-/**
- * Farmer rejects a pending order.
- * - Restores stock
- * - Sets status to 'cancelled'
- * - Notifies client
- */
-export const rejectOrder = async (
-  orderId: string,
-  farmerId: string
-): Promise<OrderDocument> => {
-  const order = await Order.findById(orderId).populate("inventoryBatchId");
-  if (!order) throw ApiError.notFound("Order not found");
-
-  const batch = await InventoryBatch.findById(order.inventoryBatchId);
-  if (!batch) throw ApiError.notFound("Inventory batch not found");
-  if (batch.farmerId.toString() !== farmerId)
-    throw ApiError.forbidden("This order is not for your inventory");
-
-  if (order.orderStatus !== "pending")
-    throw ApiError.badRequest(
-      `Cannot reject an order in '${order.orderStatus}' status`
-    );
-
-  order.orderStatus = "cancelled";
-  await order.save();
-
-  // Restore stock
-  batch.quantityKg += order.quantityKg;
-  // Restore to 'available' whenever stock exists — covers both the normal
-  // case (was 'reserved') and any edge case where the batch was incorrectly
-  // marked 'sold' despite having remaining stock.
-  if (batch.quantityKg > 0 && batch.status !== "expired") {
-    batch.status = "available";
-  }
-  await batch.save();
-
-  // Notify client
-  const clientRoom = `user:${order.clientId.toString()}`;
-  emit(clientRoom, "order:statusUpdate", {
-    orderId: order._id,
-    previousStatus: "pending",
-    newStatus: "cancelled",
-    message: "Your order has been rejected by the farmer.",
-  });
-
-  await Notification.create({
-    userId: order.clientId,
-    title: "Order Rejected",
-    message: "Unfortunately the farmer rejected your order. Your stock has been restored.",
-    type: "order_rejected",
-    relatedId: order._id,
-  });
-
-  emitInventoryRefresh();
-
-  return order;
-};
-
-/**
- * Farmer advances order status: accepted → packed → shipped → delivered
- */
-export const updateOrderStatus = async (
-  orderId: string,
-  farmerId: string,
-  newStatus: OrderStatus
-): Promise<OrderDocument> => {
-  const order = await Order.findById(orderId).populate("inventoryBatchId");
-  if (!order) throw ApiError.notFound("Order not found");
-
-  const batch = await InventoryBatch.findById(order.inventoryBatchId);
-  if (!batch) throw ApiError.notFound("Inventory batch not found");
-  if (batch.farmerId.toString() !== farmerId)
-    throw ApiError.forbidden("This order is not for your inventory");
-
-  // Validate status progression
-  const expectedNext = FARMER_STATUS_PROGRESSION[order.orderStatus];
-  if (expectedNext !== newStatus) {
-    throw ApiError.badRequest(
-      `Cannot move order from '${order.orderStatus}' to '${newStatus}'. ` +
-        (expectedNext
-          ? `Next valid status is '${expectedNext}'.`
-          : "Order has reached its final status.")
-    );
-  }
-
-  const previousStatus = order.orderStatus;
-  order.orderStatus = newStatus;
-
-  // Update batch status when the order reaches "delivered".
-  // IMPORTANT: Only mark the batch as "sold" when ALL stock is exhausted.
-  // Partial orders (e.g. 300 kg sold from a 500 kg batch) leave the batch
-  // with remaining stock — it must stay "available" for future orders.
-  if (newStatus === "delivered") {
-    if (batch.quantityKg <= 0) {
-      batch.status = "sold";
-    } else {
-      // Remaining stock exists — keep it available.
-      // (also corrects any batch that was wrongly set to "reserved" when
-      //  stock hit zero due to this order but was later partially cancelled)
-      batch.status = "available";
-    }
-    await batch.save();
-  }
-
-  await order.save();
-
-  // Notify client
-  const notifMessages: Partial<Record<OrderStatus, string>> = {
-    packed: "Your order has been packed and is ready for shipment.",
-    shipped: "Your order is on its way! 🚚",
-    delivered: "Your order has been delivered. Thank you! 🎉",
-  };
-
-  const clientRoom = `user:${order.clientId.toString()}`;
-  emit(clientRoom, "order:statusUpdate", {
-    orderId: order._id,
-    previousStatus,
-    newStatus,
-    message: notifMessages[newStatus] ?? `Order status updated to ${newStatus}`,
-  });
-
-  if (notifMessages[newStatus]) {
-    await Notification.create({
-      userId: order.clientId,
-      title: `Order ${newStatus.charAt(0).toUpperCase() + newStatus.slice(1)}`,
-      message: notifMessages[newStatus]!,
-      type: `order_${newStatus}` as never,
-      relatedId: order._id,
-    });
-  }
-
-  return order.populate([
-    { path: "clientId", select: "name email" },
-    { path: "inventoryBatchId", select: "category quantityKg pricePerKg location" },
-  ]);
-};
+export const updateOrderStatus = (orderId: string, actor: Actor, newStatus: OrderStatus) =>
+  transitionOrder(orderId, actor, newStatus);
 
 /**
  * List orders — scoped by role:
@@ -436,7 +448,7 @@ export const listOrders = async (
   const skip = (page - 1) * limit;
 
   const filter: Record<string, unknown> = {};
-  if (orderStatus) filter.orderStatus = orderStatus;
+  if (orderStatus) filter.orderStatus = { $in: storedValuesFor(normalizeStatus(orderStatus)) };
   if (clientId) filter.clientId = new mongoose.Types.ObjectId(clientId);
 
   // Farmer-scoped: only orders whose batch belongs to this farmer
@@ -446,7 +458,6 @@ export const listOrders = async (
       "_id"
     ).lean();
 
-    // If the farmer has no batches at all, return early — no orders possible.
     if (farmerBatchIds.length === 0) {
       return {
         orders: [],
@@ -459,8 +470,7 @@ export const listOrders = async (
 
   const [orders, total] = await Promise.all([
     Order.find(filter)
-      .populate("clientId", "name email")
-      .populate("inventoryBatchId", "category quantityKg pricePerKg farmerId location")
+      .populate(ORDER_POPULATE)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -476,23 +486,14 @@ export const listOrders = async (
 export const getOrderById = async (
   orderId: string,
   requesterId: string,
-  requesterRole: string
+  requesterRole: UserRole
 ): Promise<OrderDocument> => {
-  const order = await Order.findById(orderId)
-    .populate("clientId", "name email")
-    .populate("inventoryBatchId", "category quantityKg pricePerKg farmerId location");
+  if (!mongoose.isValidObjectId(orderId)) throw ApiError.badRequest("Invalid order ID");
 
+  const order = await Order.findById(orderId).populate(ORDER_POPULATE);
   if (!order) throw ApiError.notFound("Order not found");
 
-  if (requesterRole === "client" && order.clientId._id.toString() !== requesterId)
-    throw ApiError.forbidden("Access denied");
-
-  if (requesterRole === "farmer") {
-    const batch = await InventoryBatch.findById(order.inventoryBatchId);
-    if (!batch || batch.farmerId.toString() !== requesterId)
-      throw ApiError.forbidden("Access denied");
-  }
-
+  await assertOrderAccess(order, { id: requesterId, role: requesterRole });
   return order;
 };
 
@@ -500,7 +501,9 @@ export const getOrderStats = async () => {
   return Order.aggregate([
     {
       $group: {
-        _id: "$orderStatus",
+        _id: {
+          $cond: [{ $eq: ["$orderStatus", LEGACY_PACKAGED_STATUS] }, "packaged", "$orderStatus"],
+        },
         count: { $sum: 1 },
         totalRevenue: { $sum: "$totalAmount" },
       },

@@ -8,7 +8,8 @@ export const createOrderValidator = [
 
   body("quantityKg")
     .notEmpty().withMessage("Quantity is required")
-    .isFloat({ min: 0.1 }).withMessage("Quantity must be at least 0.1 kg"),
+    .isFloat({ min: 0.1, max: 1_000_000 }).withMessage("Quantity must be between 0.1 kg and 1,000,000 kg")
+    .toFloat(),
 
   body("destination")
     .trim()
@@ -28,8 +29,10 @@ export const updateOrderStatusValidator = [
 
   body("orderStatus")
     .notEmpty().withMessage("Order status is required")
-    .isIn(["packed", "shipped", "delivered"])
-    .withMessage("Farmers can only move orders to: packed, shipped, delivered"),
+    // Accept the legacy spelling from older clients.
+    .customSanitizer((v) => (v === "packed" ? "packaged" : v))
+    .isIn(["packaged", "shipped", "delivered", "cancelled"])
+    .withMessage("Order status must be one of: packaged, shipped, delivered, cancelled"),
 
   validate,
 ];

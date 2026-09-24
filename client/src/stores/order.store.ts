@@ -9,19 +9,42 @@ interface OrderState {
   pagination: Pagination | null;
   isLoading: boolean;
   error: string | null;
+  lastParams: Record<string, unknown>;
 
   fetchOrders: (params?: Record<string, unknown>) => Promise<void>;
   fetchStats: () => Promise<void>;
-  createOrder: (data: { inventoryBatchId: string; quantityKg: number; destination: string; notes?: string }) => Promise<void>;
-  cancelOrder: (id: string) => Promise<void>;
-  acceptOrder: (id: string) => Promise<void>;
-  rejectOrder: (id: string) => Promise<void>;
-  updateOrderStatus: (id: string, status: OrderStatus) => Promise<void>;
-  /** Called by the socket hook to sync a real-time status change */
-  updateOrderInList: (orderId: string, newStatus: OrderStatus) => void;
-  updateOrderPaymentStatusInList: (orderId: string, newPaymentStatus: 'pending' | 'paid' | 'failed' | 'refunded') => void;
+  createOrder: (data: { inventoryBatchId: string; quantityKg: number; destination: string; notes?: string }) => Promise<Order>;
+  cancelOrder: (id: string) => Promise<Order>;
+  acceptOrder: (id: string) => Promise<Order>;
+  rejectOrder: (id: string) => Promise<Order>;
+  updateOrderStatus: (id: string, status: OrderStatus) => Promise<Order>;
+  /**
+   * Re-reads one order from the API and merges it into the list. Used when a
+   * socket `order:updated` event arrives — the event itself is never trusted
+   * as the new state.
+   */
+  refreshOrder: (id: string) => Promise<Order | null>;
   clearError: () => void;
 }
+
+/** Replace the order in the list, or prepend it when it's new to this view. */
+const upsert = (orders: Order[], order: Order): Order[] =>
+  orders.some((o) => o._id === order._id)
+    ? orders.map((o) => (o._id === order._id ? order : o))
+    : [order, ...orders];
+
+/**
+ * Mutations throw an Error carrying the server's message so the calling page
+ * can show it (toast / inline) — the store never swallows failures.
+ */
+const mutation = async (fn: () => Promise<{ data: { data?: Order } }>, fallback: string): Promise<Order> => {
+  try {
+    const res = await fn();
+    return res.data.data!;
+  } catch (err) {
+    throw new Error(extractMessage(err, fallback));
+  }
+};
 
 export const useOrderStore = create<OrderState>((set, get) => ({
   orders: [],
@@ -29,18 +52,20 @@ export const useOrderStore = create<OrderState>((set, get) => ({
   pagination: null,
   isLoading: false,
   error: null,
+  lastParams: {},
 
   fetchOrders: async (params) => {
-    set({ isLoading: true, error: null });
+    const p = params ?? {};
+    set({ isLoading: true, error: null, lastParams: p });
     try {
-      const res = await orderApi.list(params as Record<string, string>);
+      const res = await orderApi.list(p as Record<string, string>);
       set({
         orders: res.data.data ?? [],
         pagination: res.data.pagination ?? null,
         isLoading: false,
       });
     } catch (err) {
-      set({ error: extractMessage(err), isLoading: false });
+      set({ error: extractMessage(err, 'Failed to load orders'), isLoading: false });
     }
   },
 
@@ -48,91 +73,60 @@ export const useOrderStore = create<OrderState>((set, get) => ({
     try {
       const res = await orderApi.getStats();
       set({ stats: res.data.data ?? [] });
-    } catch {/* silent */}
+    } catch (err) {
+      set({ error: extractMessage(err, 'Failed to load order statistics') });
+    }
   },
 
   createOrder: async (data) => {
-    set({ isLoading: true, error: null });
-    try {
-      const res = await orderApi.create(data);
-      set((state) => ({
-        orders: [res.data.data!, ...state.orders],
-        isLoading: false,
-      }));
-    } catch (err) {
-      set({ error: extractMessage(err), isLoading: false });
-      throw err;
-    }
+    const order = await mutation(() => orderApi.create(data), 'Failed to place order');
+    set((state) => ({ orders: upsert(state.orders, order) }));
+    return order;
   },
 
   cancelOrder: async (id) => {
-    try {
-      await orderApi.cancel(id);
-      set((state) => ({
-        orders: state.orders.map((o) =>
-          o._id === id ? { ...o, orderStatus: 'cancelled' as OrderStatus } : o
-        ),
-      }));
-    } catch (err) {
-      set({ error: extractMessage(err) });
-      throw err;
-    }
+    const order = await mutation(() => orderApi.cancel(id), 'Failed to cancel order');
+    set((state) => ({ orders: upsert(state.orders, order) }));
+    return order;
   },
 
   acceptOrder: async (id) => {
-    try {
-      const res = await orderApi.accept(id);
-      set((state) => ({
-        orders: state.orders.map((o) => (o._id === id ? res.data.data! : o)),
-      }));
-    } catch (err) {
-      set({ error: extractMessage(err) });
-      throw err;
-    }
+    const order = await mutation(() => orderApi.accept(id), 'Failed to accept order');
+    set((state) => ({ orders: upsert(state.orders, order) }));
+    return order;
   },
 
   rejectOrder: async (id) => {
-    try {
-      const res = await orderApi.reject(id);
-      set((state) => ({
-        orders: state.orders.map((o) => (o._id === id ? res.data.data! : o)),
-      }));
-    } catch (err) {
-      set({ error: extractMessage(err) });
-      throw err;
-    }
+    const order = await mutation(() => orderApi.reject(id), 'Failed to reject order');
+    set((state) => ({ orders: upsert(state.orders, order) }));
+    return order;
   },
 
   updateOrderStatus: async (id, status) => {
+    const order = await mutation(() => orderApi.updateStatus(id, status), 'Failed to update order');
+    set((state) => ({ orders: upsert(state.orders, order) }));
+    return order;
+  },
+
+  refreshOrder: async (id) => {
     try {
-      const res = await orderApi.updateStatus(id, status);
-      set((state) => ({
-        orders: state.orders.map((o) => (o._id === id ? res.data.data! : o)),
-      }));
+      const res = await orderApi.getById(id);
+      const order = res.data.data;
+      if (!order) return null;
+
+      // Only add an order the current filter would include.
+      const statusFilter = get().lastParams.orderStatus as string | undefined;
+      const inList = get().orders.some((o) => o._id === id);
+      if (inList || !statusFilter || statusFilter === order.orderStatus) {
+        set((state) => ({ orders: upsert(state.orders, order) }));
+      } else {
+        set((state) => ({ orders: state.orders.filter((o) => o._id !== id) }));
+      }
+      return order;
     } catch (err) {
-      set({ error: extractMessage(err) });
-      throw err;
+      set({ error: extractMessage(err, 'Failed to refresh order') });
+      return null;
     }
-  },
-
-  updateOrderInList: (orderId, newStatus) => {
-    const existing = get().orders.find((o) => o._id === orderId);
-    if (!existing) return;
-    set((state) => ({
-      orders: state.orders.map((o) =>
-        o._id === orderId ? { ...o, orderStatus: newStatus } : o
-      ),
-    }));
-  },
-
-  updateOrderPaymentStatusInList: (orderId, newPaymentStatus) => {
-    const existing = get().orders.find((o) => o._id === orderId);
-    if (!existing) return;
-    set((state) => ({
-      orders: state.orders.map((o) =>
-        o._id === orderId ? { ...o, paymentStatus: newPaymentStatus } : o
-      ),
-    }));
   },
 
   clearError: () => set({ error: null }),

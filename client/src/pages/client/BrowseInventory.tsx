@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
 import {
   Search, ShoppingCart, Package, Loader2, MapPin, Filter,
-  ChevronDown, ChevronUp, X, Eye, Calendar, TrendingUp,
+  ChevronDown, ChevronUp, X, Eye, Calendar, TrendingUp, AlertCircle, CreditCard,
 } from 'lucide-react';
 import { useInventoryStore } from '../../stores/inventory.store';
 import { useOrderStore } from '../../stores/order.store';
@@ -9,7 +11,8 @@ import Modal from '../../components/common/Modal';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Badge from '../../components/common/Badge';
 import { formatCurrency, formatDate, formatWeight, getCategoryIcon } from '../../utils/helpers';
-import type { InventoryBatch } from '../../types';
+import type { InventoryBatch, Order } from '../../types';
+import { formatOrderRef } from '../../constants/orderStatus';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -53,12 +56,29 @@ const BrowseInventory: React.FC = () => {
   const [orderBatch, setOrderBatch]   = useState<InventoryBatch | null>(null);
   const [detailBatch, setDetailBatch] = useState<InventoryBatch | null>(null);
   const [ordering, setOrdering]       = useState(false);
-  const [success, setSuccess]         = useState(false);
+  const [placedOrder, setPlacedOrder] = useState<Order | null>(null);
+  const [orderError, setOrderError]   = useState<string | null>(null);
 
-  const { register, handleSubmit, formState: { errors }, reset, watch } = useForm<OrderForm>({
+  const { register, handleSubmit, formState: { errors }, reset, watch, setError } = useForm<OrderForm>({
     resolver: zodResolver(orderSchema),
   });
   const qty = watch('quantityKg');
+  // Immediate feedback; the server enforces the same limit atomically.
+  const overLimit = !!orderBatch && qty > orderBatch.quantityKg;
+
+  const openOrderModal = (batch: InventoryBatch) => {
+    setOrderBatch(batch);
+    setPlacedOrder(null);
+    setOrderError(null);
+    reset();
+  };
+
+  const closeOrderModal = () => {
+    if (ordering) return;
+    setOrderBatch(null);
+    setPlacedOrder(null);
+    setOrderError(null);
+  };
 
   // ── Fetch with filters ────────────────────────────────────────────────────
   const applyFilters = useCallback(() => {
@@ -90,20 +110,30 @@ const BrowseInventory: React.FC = () => {
 
   // ── Place Order ───────────────────────────────────────────────────────────
   const onPlaceOrder = async (data: OrderForm) => {
-    if (!orderBatch) return;
+    if (!orderBatch || ordering) return;
+    if (data.quantityKg > orderBatch.quantityKg) {
+      setError('quantityKg', { message: `Only ${formatWeight(orderBatch.quantityKg)} available in this batch` });
+      return;
+    }
     setOrdering(true);
+    setOrderError(null);
     try {
-      await createOrder({
+      const order = await createOrder({
         inventoryBatchId: orderBatch._id,
         quantityKg:       data.quantityKg,
         destination:      data.destination,
         notes:            data.notes,
       });
-      setSuccess(true);
+      setPlacedOrder(order);
+      toast.success(`Order ${formatOrderRef(order._id)} placed`, { description: 'Complete the payment so the farmer can accept it.' });
       reset();
-      setTimeout(() => { setOrderBatch(null); setSuccess(false); }, 2200);
-    } catch {/* error in store */}
-    setOrdering(false);
+    } catch (err) {
+      // Keep the modal open with the server's reason (e.g. stock changed).
+      setOrderError((err as Error).message);
+      toast.error('Could not place order', { description: (err as Error).message });
+    } finally {
+      setOrdering(false);
+    }
   };
 
   const setFilter = (key: keyof FilterState, value: string) =>
@@ -323,7 +353,7 @@ const BrowseInventory: React.FC = () => {
                   </button>
                   <button
                     id={`order-btn-${batch._id}`}
-                    onClick={() => { setOrderBatch(batch); reset(); }}
+                    onClick={() => openOrderModal(batch)}
                     className="btn-primary flex-1 justify-center"
                   >
                     <ShoppingCart className="w-4 h-4" /> Order
@@ -420,7 +450,7 @@ const BrowseInventory: React.FC = () => {
                 <button onClick={() => setDetailBatch(null)} className="btn-secondary">Close</button>
                 <button
                   id={`order-from-detail-${detailBatch._id}`}
-                  onClick={() => { setDetailBatch(null); setOrderBatch(detailBatch); reset(); }}
+                  onClick={() => { setDetailBatch(null); openOrderModal(detailBatch); }}
                   className="btn-primary"
                 >
                   <ShoppingCart className="w-4 h-4" /> Place Order
@@ -434,12 +464,19 @@ const BrowseInventory: React.FC = () => {
       {/* ══════════════════════════════════════════════════════════════════════
           PLACE ORDER MODAL
       ══════════════════════════════════════════════════════════════════════ */}
-      <Modal isOpen={!!orderBatch} onClose={() => setOrderBatch(null)} title="Place Order" size="md">
-        {success ? (
-          <div className="py-8 text-center">
-            <div className="text-5xl mb-3">🎉</div>
-            <p className="text-lg font-bold text-emerald-400">Order Placed!</p>
-            <p className="text-slate-400 text-sm mt-1">Your order is pending admin approval.</p>
+      <Modal isOpen={!!orderBatch} onClose={closeOrderModal} title="Place Order" size="md">
+        {placedOrder ? (
+          <div className="py-6 text-center space-y-3">
+            <p className="text-lg font-bold text-emerald-400">Order {formatOrderRef(placedOrder._id)} placed</p>
+            <p className="text-slate-400 text-sm">
+              Stock has been reserved for you. Pay now — the farmer can accept your order once it is paid.
+            </p>
+            <div className="flex justify-center gap-3 pt-2">
+              <button onClick={closeOrderModal} className="btn-secondary">Keep browsing</button>
+              <Link to={`/client/orders/${placedOrder._id}`} className="btn-primary">
+                <CreditCard className="w-4 h-4" /> Go to payment
+              </Link>
+            </div>
           </div>
         ) : orderBatch && (
           <form onSubmit={handleSubmit(onPlaceOrder)} className="space-y-4">
@@ -462,7 +499,12 @@ const BrowseInventory: React.FC = () => {
                 className="input-field" placeholder="e.g. 50"
               />
               {errors.quantityKg && <p className="text-red-400 text-xs mt-1">{errors.quantityKg.message}</p>}
-              {qty > 0 && !isNaN(qty) && (
+              {!errors.quantityKg && overLimit && (
+                <p className="text-red-400 text-xs mt-1" role="alert">
+                  Only {formatWeight(orderBatch.quantityKg)} available in this batch
+                </p>
+              )}
+              {qty > 0 && !isNaN(qty) && !overLimit && (
                 <p className="text-xs text-emerald-400 mt-1">
                   Estimated total: {formatCurrency(qty * orderBatch.pricePerKg)}
                 </p>
@@ -480,9 +522,15 @@ const BrowseInventory: React.FC = () => {
               <textarea {...register('notes')} rows={2} className="input-field resize-none" placeholder="Any special instructions…" />
             </div>
 
+            {orderError && (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-sm text-red-300" role="alert">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" /> {orderError}
+              </div>
+            )}
+
             <div className="flex justify-end gap-3 pt-2">
-              <button type="button" onClick={() => setOrderBatch(null)} className="btn-secondary">Cancel</button>
-              <button type="submit" disabled={ordering} className="btn-primary">
+              <button type="button" onClick={closeOrderModal} disabled={ordering} className="btn-secondary">Cancel</button>
+              <button type="submit" disabled={ordering || overLimit} className="btn-primary">
                 {ordering ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
                 {ordering ? 'Placing…' : 'Confirm Order'}
               </button>

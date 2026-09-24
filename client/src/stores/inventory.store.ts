@@ -42,7 +42,9 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
     try {
       const res = await inventoryApi.getStats();
       set({ stats: res.data.data ?? [] });
-    } catch {/* silent */}
+    } catch (err) {
+      set({ error: extractMessage(err, 'Failed to load inventory statistics') });
+    }
   },
 
   createBatch: async (data) => {

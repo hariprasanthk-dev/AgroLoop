@@ -13,6 +13,8 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default("7d"),
   RAZORPAY_KEY_ID: z.string().min(1, "RAZORPAY_KEY_ID is required"),
   RAZORPAY_KEY_SECRET: z.string().min(1, "RAZORPAY_KEY_SECRET is required"),
+  // Optional — enables POST /api/payments/webhook (server-side reconciliation)
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
   CLIENT_URL: z.string().default("http://localhost:5173"),
   // ── Observability (optional) ──────────────────────────────────────────────
   SENTRY_DSN: z.string().optional(),

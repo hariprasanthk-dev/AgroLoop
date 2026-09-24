@@ -52,10 +52,11 @@ router.put(
   OrderController.rejectOrder
 );
 
-// ─── Farmer: Advance Status (accepted→packed→shipped→delivered) ───────────────
+// ─── Farmer: Advance / cancel (accepted→packaged→shipped→delivered, →cancelled)
+// ─── Admin:  cancel only. Transition rules are enforced in order.service. ────
 router.put(
   "/:id/status",
-  authorize("farmer"),
+  authorize("farmer", "admin"),
   updateOrderStatusValidator,
   OrderController.updateOrderStatus
 );

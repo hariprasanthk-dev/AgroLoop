@@ -30,7 +30,8 @@ export const orderApi = {
   reject: (id: string) =>
     api.put<ApiResponse<Order>>(`/orders/${id}/reject`),
 
-  // Farmer advances status: accepted → packed → shipped → delivered
+  // Farmer: accepted → packaged → shipped → delivered, or → cancelled.
+  // Admin: → cancelled only. The server enforces every transition.
   updateStatus: (id: string, orderStatus: OrderStatus) =>
     api.put<ApiResponse<Order>>(`/orders/${id}/status`, { orderStatus }),
 

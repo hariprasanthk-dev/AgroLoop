@@ -11,6 +11,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { InventoryBatch } from '../../types';
+import { toast } from 'sonner';
+import { extractMessage } from '../../utils/helpers';
 
 // ─── Zod Schema ───────────────────────────────────────────────────────────────
 const batchSchema = z.object({
@@ -88,7 +90,9 @@ const FarmerInventory: React.FC = () => {
       setSuccessMsg('Batch Added!');
       addForm.reset({ category: 'fresh', status: 'available' });
       setTimeout(() => { setAddOpen(false); setSuccessMsg(''); }, 1500);
-    } catch { /* error handled by store */ }
+    } catch (err) {
+      toast.error('Could not add batch', { description: extractMessage(err, 'Please try again.') });
+    }
     setSubmitting(false);
   };
 
@@ -104,15 +108,22 @@ const FarmerInventory: React.FC = () => {
       } as never);
       setSuccessMsg('Batch Updated!');
       setTimeout(() => { setEditBatch(null); setSuccessMsg(''); }, 1500);
-    } catch { /* error handled by store */ }
+    } catch (err) {
+      toast.error('Could not update batch', { description: extractMessage(err, 'Please try again.') });
+    }
     setSubmitting(false);
   };
 
   // ── Delete Batch ──────────────────────────────────────────────────────────
   const handleDelete = async () => {
     if (!deleteId) return;
-    await deleteBatch(deleteId);
-    setDeleteId(null);
+    try {
+      await deleteBatch(deleteId);
+      toast.success('Batch deleted');
+      setDeleteId(null);
+    } catch (err) {
+      toast.error('Could not delete batch', { description: extractMessage(err, 'Please try again.') });
+    }
   };
 
   // ── Batch Form Fields (reused for Add & Edit) ─────────────────────────────

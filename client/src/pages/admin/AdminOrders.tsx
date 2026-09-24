@@ -5,9 +5,10 @@ import Badge from '../../components/common/Badge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import Modal from '../../components/common/Modal';
 import { formatCurrency, formatDate, formatWeight } from '../../utils/helpers';
-import type { Order, OrderStatus } from '../../types';
-
-const statusFlow: OrderStatus[] = ['pending','accepted','packed','shipped','delivered','cancelled'];
+import type { Order } from '../../types';
+import { toast } from 'sonner';
+import { CANCELLABLE_BY_FARMER, ORDER_STATUS_FILTERS, ORDER_STATUS_LABEL, formatOrderRef, normalizeOrderStatus } from '../../constants/orderStatus';
+import { OrderStatusPair } from '../../components/orders/StatusBadges';
 
 const AdminOrders: React.FC = () => {
   const { orders, isLoading, fetchOrders, updateOrderStatus } = useOrderStore();
@@ -20,11 +21,20 @@ const AdminOrders: React.FC = () => {
     fetchOrders({ orderStatus: filterStatus || undefined });
   }, [fetchOrders, filterStatus]);
 
-  const handleStatusChange = async (id: string, status: OrderStatus) => {
+  // Admins can cancel an order; fulfilment steps belong to the farmer and are
+  // enforced by the server's order state machine.
+  const handleCancel = async (id: string) => {
+    if (updating) return;
     setUpdating(true);
-    await updateOrderStatus(id, status);
-    setUpdating(false);
-    setSelected(null);
+    try {
+      await updateOrderStatus(id, 'cancelled');
+      toast.success(`Order ${formatOrderRef(id)} cancelled`);
+      setSelected(null);
+    } catch (err) {
+      toast.error('Could not cancel the order', { description: (err as Error).message });
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const filtered = orders.filter(o => {
@@ -49,7 +59,7 @@ const AdminOrders: React.FC = () => {
         </div>
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="select-field w-44">
           <option value="">All Statuses</option>
-          {statusFlow.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+          {ORDER_STATUS_FILTERS.map(s => <option key={s} value={s}>{ORDER_STATUS_LABEL[s]}</option>)}
         </select>
       </div>
 
@@ -80,7 +90,7 @@ const AdminOrders: React.FC = () => {
                       <td><Badge label={order.orderStatus} /></td>
                       <td className="text-slate-400">{formatDate(order.createdAt)}</td>
                       <td>
-                        <button onClick={() => setSelected(order)} className="btn-secondary !px-3 !py-1.5 text-xs">Update</button>
+                        <button onClick={() => setSelected(order)} className="btn-secondary !px-3 !py-1.5 text-xs">Manage</button>
                       </td>
                     </tr>
                   );
@@ -92,17 +102,23 @@ const AdminOrders: React.FC = () => {
       </div>
 
       {selected && (
-        <Modal isOpen={!!selected} onClose={() => setSelected(null)} title="Update Order Status" size="sm">
-          <div className="mb-4">
-            <p className="text-slate-400 text-sm">Order <span className="font-mono text-slate-300">#{selected._id.slice(-8)}</span></p>
-            <p className="text-slate-400 text-sm mt-1">Current: <Badge label={selected.orderStatus} /></p>
-          </div>
-          <div className="space-y-2">
-            {statusFlow.filter(s => s !== selected.orderStatus).map(s => (
-              <button key={s} onClick={() => handleStatusChange(selected._id, s)} disabled={updating} className="w-full btn-secondary justify-start">
-                <span className="capitalize">{s}</span>
+        <Modal isOpen={!!selected} onClose={() => { if (!updating) setSelected(null); }} title={`Order ${formatOrderRef(selected._id)}`} size="sm">
+          <div className="space-y-4">
+            <OrderStatusPair orderStatus={selected.orderStatus} paymentStatus={selected.paymentStatus} />
+            <p className="text-slate-400 text-xs">
+              Accepting, packaging, shipping and delivery are performed by the farmer.
+              Admins can cancel an order that has not been delivered.
+            </p>
+            {selected.paymentStatus === 'paid' && (
+              <p className="text-amber-300 text-xs">This order is paid — refunds are not automated and must be arranged manually.</p>
+            )}
+            {CANCELLABLE_BY_FARMER.includes(normalizeOrderStatus(selected.orderStatus)) ? (
+              <button onClick={() => handleCancel(selected._id)} disabled={updating} className="w-full btn-danger border justify-center">
+                {updating ? 'Cancelling…' : 'Cancel order'}
               </button>
-            ))}
+            ) : (
+              <p className="text-slate-500 text-sm">No admin actions are available for a {ORDER_STATUS_LABEL[normalizeOrderStatus(selected.orderStatus)].toLowerCase()} order.</p>
+            )}
           </div>
         </Modal>
       )}

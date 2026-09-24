@@ -32,8 +32,14 @@ export interface InventoryBatch {
 // ─── Order ────────────────────────────────────────────────────────────────────
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
 export type OrderStatus =
-  | 'pending' | 'accepted' | 'packed'
+  | 'pending' | 'accepted' | 'packaged'
   | 'shipped' | 'delivered' | 'cancelled';
+
+export interface OrderStatusHistoryEntry {
+  status: OrderStatus;
+  at: string;
+  by?: UserRole | 'system';
+}
 
 export interface Order {
   _id: string;
@@ -45,7 +51,11 @@ export interface Order {
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus;
   notes?: string;
+  /** Written by the server on every status change (absent on older orders). */
+  statusHistory?: OrderStatusHistoryEntry[];
+  cancelledBy?: 'client' | 'farmer' | 'admin';
   createdAt: string;
+  updatedAt?: string;
 }
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
@@ -66,10 +76,11 @@ export interface Payment {
 
 // ─── Notification ─────────────────────────────────────────────────────────────
 export type NotificationType =
-  | 'order_placed' | 'order_accepted' | 'order_packed'
+  | 'order_placed' | 'order_accepted' | 'order_packaged'
+  | 'order_packed' // legacy
   | 'order_shipped' | 'order_delivered'
   | 'order_rejected' | 'order_cancelled'
-  | 'payment_success' | 'inventory_update' | 'general';
+  | 'payment_success' | 'payment_failed' | 'inventory_update' | 'general';
 
 export interface Notification {
   _id: string;
@@ -132,7 +143,7 @@ export interface AdminDashboardStats {
   orderBreakdown: {
     pending: number;
     accepted: number;
-    packed: number;
+    packaged: number;
     shipped: number;
     delivered: number;
     cancelled: number;

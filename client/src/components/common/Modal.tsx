@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -17,16 +17,21 @@ const sizeMap = {
 };
 
 const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, size = 'md' }) => {
-  // Close on Escape
+  const titleId = useId();
+
+  // Close on Escape — only while open, so closed modals on the same page
+  // don't react to key presses.
   useEffect(() => {
+    if (!isOpen) return;
     const handler = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [isOpen, onClose]);
 
   // Lock body scroll
   useEffect(() => {
-    document.body.style.overflow = isOpen ? 'hidden' : '';
+    if (!isOpen) return;
+    document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = ''; };
   }, [isOpen]);
 
@@ -39,12 +44,18 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, size = 
         className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
         onClick={onClose}
       />
-      {/* Panel */}
-      <div className={`relative w-full ${sizeMap[size]} glass-card p-6 animate-slide-up`}>
+      {/* Panel — scrolls internally so tall content stays reachable on phones */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={`relative w-full ${sizeMap[size]} max-h-[90dvh] overflow-y-auto glass-card p-6 animate-slide-up`}
+      >
         <div className="flex items-center justify-between mb-5">
-          <h3 className="text-lg font-bold text-slate-100">{title}</h3>
+          <h3 id={titleId} className="text-lg font-bold text-slate-100">{title}</h3>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 transition-colors"
           >
             <X className="w-5 h-5" />

@@ -60,7 +60,7 @@ const Login: React.FC = () => {
           <p className="text-slate-400 text-sm mb-6">Sign in to your account</p>
 
           {error && (
-            <div className={`mb-4 px-4 py-3 rounded-xl text-sm animate-fade-in border ${
+            <div role="alert" data-testid="login-error" className={`mb-4 px-4 py-3 rounded-xl text-sm animate-fade-in border ${
               error.includes('not verified')
                 ? 'bg-amber-500/10 border-amber-500/20 text-amber-300'
                 : 'bg-red-500/10 border-red-500/20 text-red-400'
@@ -80,7 +80,7 @@ const Login: React.FC = () => {
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+              <label htmlFor="login-email" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
                 Email
               </label>
               <div className="relative">
@@ -96,8 +96,9 @@ const Login: React.FC = () => {
               {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email.message}</p>}
             </div>
 
+            <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                <label htmlFor="login-password" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Password
                 </label>
                 <Link
@@ -118,6 +119,7 @@ const Login: React.FC = () => {
                 />
               </div>
               {errors.password && <p className="text-red-400 text-xs mt-1">{errors.password.message}</p>}
+            </div>
 
             <button
               type="submit"

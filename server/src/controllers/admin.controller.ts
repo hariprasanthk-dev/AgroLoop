@@ -66,15 +66,17 @@ export const getDashboardStats = asyncHandler(
     const orderBreakdown = {
       pending: 0,
       accepted: 0,
-      packed: 0,
+      packaged: 0,
       shipped: 0,
       delivered: 0,
       cancelled: 0,
     };
     let totalOrders = 0;
     orderStats.forEach((stat) => {
-      if (stat._id in orderBreakdown) {
-        orderBreakdown[stat._id as keyof typeof orderBreakdown] = stat.count;
+      // Older documents may still store the legacy "packed" value.
+      const key = stat._id === "packed" ? "packaged" : stat._id;
+      if (key in orderBreakdown) {
+        orderBreakdown[key as keyof typeof orderBreakdown] += stat.count;
       }
       totalOrders += stat.count;
     });
