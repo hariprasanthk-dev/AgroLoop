@@ -134,11 +134,13 @@ const FarmerOrders: React.FC = () => {
     );
   });
 
-  const awaitingPayment = orders.filter((o) => o.orderStatus === 'pending' && o.paymentStatus !== 'paid').length;
-  const readyToAccept   = orders.filter((o) => o.orderStatus === 'pending' && o.paymentStatus === 'paid').length;
-  const inProgress      = orders.filter((o) => ['accepted', 'packaged', 'shipped'].includes(normalizeOrderStatus(o.orderStatus))).length;
-  const delivered       = orders.filter((o) => o.orderStatus === 'delivered').length;
-  const totalOrders     = pagination?.total ?? orders.length;
+  // New orders waiting for the farmer to accept (step 1).
+  const awaitingReview    = orders.filter((o) => o.orderStatus === 'pending').length;
+  // Accepted orders where the client hasn't paid yet (step 2).
+  const awaitingPayment   = orders.filter((o) => o.orderStatus === 'accepted' && o.paymentStatus !== 'paid').length;
+  const inProgress        = orders.filter((o) => ['packaged', 'shipped'].includes(normalizeOrderStatus(o.orderStatus))).length;
+  const delivered         = orders.filter((o) => o.orderStatus === 'delivered').length;
+  const totalOrders       = pagination?.total ?? orders.length;
   const showInitialSpinner = isLoading && orders.length === 0;
 
   const renderPaymentNote = (order: Order) => {
@@ -162,11 +164,11 @@ const FarmerOrders: React.FC = () => {
             {totalOrders} total order{totalOrders !== 1 ? 's' : ''} on your inventory
           </p>
         </div>
-        {readyToAccept > 0 && (
-          <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-3 py-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span className="text-emerald-300 text-sm font-medium">
-              {readyToAccept} paid order{readyToAccept > 1 ? 's' : ''} ready to accept
+        {awaitingReview > 0 && (
+          <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
+            <Clock className="w-4 h-4 text-amber-400" />
+            <span className="text-amber-300 text-sm font-medium">
+              {awaitingReview} new order{awaitingReview > 1 ? 's' : ''} awaiting your review
             </span>
           </div>
         )}
@@ -174,12 +176,12 @@ const FarmerOrders: React.FC = () => {
 
       {/* ── Stats Grid ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <FarmerStatCard label="Awaiting Payment" value={awaitingPayment}
-          icon={<Clock className="w-4 h-4 text-amber-400" />}
+        <FarmerStatCard label="Awaiting Review" value={awaitingReview}
+          icon={<Users className="w-4 h-4 text-amber-400" />}
           colorClass="text-amber-400" bgClass="bg-amber-500/10 border-amber-500/20" />
-        <FarmerStatCard label="Paid · Ready to Accept" value={readyToAccept}
-          icon={<CreditCard className="w-4 h-4 text-emerald-400" />}
-          colorClass="text-emerald-400" bgClass="bg-emerald-500/10 border-emerald-500/20" />
+        <FarmerStatCard label="Awaiting Payment" value={awaitingPayment}
+          icon={<CreditCard className="w-4 h-4 text-yellow-400" />}
+          colorClass="text-yellow-400" bgClass="bg-yellow-500/10 border-yellow-500/20" />
         <FarmerStatCard label="In Progress" value={inProgress}
           icon={<Truck className="w-4 h-4 text-blue-400" />}
           colorClass="text-blue-400" bgClass="bg-blue-500/10 border-blue-500/20" />
@@ -245,7 +247,10 @@ const FarmerOrders: React.FC = () => {
             </div>
           ) : filtered.map((order) => {
             const client = typeof order.clientId === 'object' ? order.clientId : null;
-            const actionable = order.orderStatus === 'pending' && order.paymentStatus === 'paid';
+            // Highlight orders that need the farmer's action: either a new pending order to review,
+            // or an accepted+paid order ready to advance to packaged.
+            const actionable = order.orderStatus === 'pending' ||
+              (order.orderStatus === 'accepted' && order.paymentStatus === 'paid');
 
             return (
               <article

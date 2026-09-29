@@ -30,7 +30,7 @@ const productName = (order: Order) => {
   return batch ? CATEGORY_LABEL[batch.category] ?? `${batch.category} onions` : 'Onion batch';
 };
 
-/** Explains the payment state in plain language for the client. */
+/** Explains the payment/order state in plain language for the client. */
 const PaymentMessage: React.FC<{ order: Order }> = ({ order }) => {
   if (needsManualRefund(order)) {
     return (
@@ -41,27 +41,45 @@ const PaymentMessage: React.FC<{ order: Order }> = ({ order }) => {
     );
   }
   if (order.orderStatus === 'cancelled') return null;
-  if (order.paymentStatus === 'failed') {
+
+  // Step 1: Order created, waiting for farmer to review and accept.
+  if (order.orderStatus === 'pending' && order.paymentStatus === 'pending') {
+    return (
+      <p className="text-xs text-blue-300 flex items-start gap-1.5">
+        <Clock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+        Waiting for the farmer to review and accept your order. Payment will be required once accepted.
+      </p>
+    );
+  }
+
+  // Step 2a: Farmer accepted, payment still needed.
+  if (order.orderStatus === 'accepted' && order.paymentStatus === 'pending') {
+    return (
+      <p className="text-xs text-amber-300 flex items-start gap-1.5">
+        <CreditCard className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+        Order accepted! Please complete payment to allow the farmer to start processing.
+      </p>
+    );
+  }
+
+  // Step 2b: Farmer accepted, but a payment attempt failed.
+  if (order.orderStatus === 'accepted' && order.paymentStatus === 'failed') {
     return (
       <p className="text-xs text-red-300 flex items-start gap-1.5" role="alert">
         <XCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-        Your last payment attempt failed. The farmer cannot accept this order until it is paid — please try again.
+        Your last payment attempt failed. Please retry to allow the farmer to continue processing.
       </p>
     );
   }
-  if (order.paymentStatus === 'pending') {
-    return (
-      <p className="text-xs text-amber-300 flex items-start gap-1.5">
-        <Clock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-        Payment pending. The farmer will review your order once it is paid.
-      </p>
-    );
+
+  // Step 3: Payment confirmed.
+  if (order.paymentStatus === 'paid') {
+    return <p className="text-xs text-emerald-300">Payment received. The farmer is processing your order.</p>;
   }
-  if (order.orderStatus === 'pending') {
-    return <p className="text-xs text-emerald-300">Payment received. Waiting for the farmer to accept your order.</p>;
-  }
+
   return null;
 };
+
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 const ClientOrders: React.FC = () => {
