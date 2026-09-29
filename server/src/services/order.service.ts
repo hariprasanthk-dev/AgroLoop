@@ -153,7 +153,9 @@ interface TransitionRule {
  * it drive, the order status.
  */
 const TRANSITIONS: Partial<Record<OrderStatus, TransitionRule>> = {
-  accepted:  { from: ["pending"],  roles: ["farmer"], requiresPaid: true },
+  // Farmer accepts first (before payment). The client then pays the accepted order.
+  accepted:  { from: ["pending"],  roles: ["farmer"], requiresPaid: false },
+  // All fulfilment steps beyond acceptance require payment to be confirmed.
   packaged:  { from: ["accepted"], roles: ["farmer"], requiresPaid: true },
   shipped:   { from: ["packaged"], roles: ["farmer"], requiresPaid: true },
   delivered: { from: ["shipped"],  roles: ["farmer"], requiresPaid: true },
@@ -402,7 +404,7 @@ export const createOrder = async (
   await notify(farmerId, {
     type: "order_placed",
     title: "New Order",
-    message: `New order ${formatOrderRef(order._id)} is waiting for payment (${quantityKg} kg of ${updatedBatch.category}).`,
+    message: `New order ${formatOrderRef(order._id)} is awaiting your review (${quantityKg} kg of ${updatedBatch.category}).`,
     relatedId: order._id,
   });
   emitOrderUpdated(order._id, [farmerId]);

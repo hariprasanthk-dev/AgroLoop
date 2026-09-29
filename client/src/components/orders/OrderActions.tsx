@@ -23,11 +23,11 @@ export interface OrderActionsProps {
  * Farmer actions for one order. Buttons mirror the server's state machine;
  * the server still enforces every rule, so a stale UI cannot skip a step.
  *
- * - pending + paid     → Accept Order / Reject
- * - pending + unpaid   → Accept disabled (waiting for payment) / Reject
- * - accepted           → Mark as Packaged   (+ Cancel)
- * - packaged           → Mark as Shipped    (+ Cancel)
- * - shipped            → Mark as Delivered  (+ Cancel)
+ * - pending              → Accept Order (always enabled) / Reject
+ * - accepted + unpaid    → Mark as Packaged disabled (waiting for payment) / Cancel
+ * - accepted + paid      → Mark as Packaged / Cancel
+ * - packaged             → Mark as Shipped    (+ Cancel)
+ * - shipped              → Mark as Delivered  (+ Cancel)
  */
 const OrderActions: React.FC<OrderActionsProps> = ({ order, onAccept, onCancel, onAdvance, busy }) => {
   const status = normalizeOrderStatus(order.orderStatus);
@@ -54,27 +54,31 @@ const OrderActions: React.FC<OrderActionsProps> = ({ order, onAccept, onCancel, 
           <button
             id={`accept-order-${order._id}`}
             onClick={() => onAccept(order._id)}
-            disabled={busy || !isPaid}
-            title={isPaid ? undefined : 'You can accept this order once the client has paid'}
+            disabled={busy}
             className="btn-primary text-xs gap-1.5 justify-center disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy ? spinner : <CheckCircle2 className="w-3.5 h-3.5" />}
             Accept Order
           </button>
         </div>
-        {!isPaid && (
-          <p className={`text-[11px] flex items-center gap-1 ${order.paymentStatus === 'failed' ? 'text-red-300' : 'text-amber-300'}`}>
-            {order.paymentStatus === 'failed'
-              ? <><AlertTriangle className="w-3 h-3" /> Client's payment failed — waiting for a successful payment</>
-              : <><Clock className="w-3 h-3" /> Waiting for the client's payment</>}
-          </p>
-        )}
+        <p className="text-[11px] text-slate-400 flex items-center gap-1">
+          <Clock className="w-3 h-3" /> New order — awaiting your review
+        </p>
       </div>
     );
   }
 
   const next = FARMER_NEXT_STEP[status];
   if (!next) return null; // delivered / cancelled — final states
+
+  // For accepted orders, show a note if payment hasn't arrived yet
+  const awaitingPaymentNote = status === 'accepted' && !isPaid && (
+    <p className={`text-[11px] flex items-center gap-1 ${order.paymentStatus === 'failed' ? 'text-red-300' : 'text-amber-300'}`}>
+      {order.paymentStatus === 'failed'
+        ? <><AlertTriangle className="w-3 h-3" /> Client's payment failed — waiting for a successful payment</>
+        : <><Clock className="w-3 h-3" /> Waiting for the client's payment</>}
+    </p>
+  );
 
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -90,7 +94,8 @@ const OrderActions: React.FC<OrderActionsProps> = ({ order, onAccept, onCancel, 
           {next.label}
         </button>
       </div>
-      {!isPaid && (
+      {awaitingPaymentNote}
+      {!isPaid && status !== 'accepted' && (
         <p className="text-[11px] text-amber-300 flex items-center gap-1">
           <Clock className="w-3 h-3" /> Payment not received — fulfilment is blocked until it is
         </p>

@@ -38,9 +38,9 @@ export const ORDER_STATUS_FILTERS: OrderStatus[] = [
 export const normalizeOrderStatus = (status: string): OrderStatus =>
   (status === 'packed' ? 'packaged' : status) as OrderStatus;
 
-/** A client can pay any order that is not cancelled and not yet paid. */
+/** A client can pay an order only after the farmer has accepted it and payment is not yet received. */
 export const canClientPay = (order: Order): boolean =>
-  order.orderStatus !== 'cancelled' && (order.paymentStatus === 'pending' || order.paymentStatus === 'failed');
+  order.orderStatus === 'accepted' && (order.paymentStatus === 'pending' || order.paymentStatus === 'failed');
 
 /** Payment was taken but the order is cancelled — refunds are not automated. */
 export const needsManualRefund = (order: Order): boolean =>

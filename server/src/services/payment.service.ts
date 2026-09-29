@@ -38,10 +38,10 @@ const getFarmerIdForOrder = async (inventoryBatchId: mongoose.Types.ObjectId) =>
 /**
  * Creates a Razorpay order and upserts a pending Payment record.
  *
- * Payment is taken up-front: the client pays while the order is PENDING and
- * the farmer can only accept once the payment is verified. Any order that is
- * not cancelled and not yet paid can be paid (this also covers orders that
- * were accepted unpaid under the previous workflow).
+ * Payment is gated on farmer acceptance: the farmer reviews and accepts the
+ * order first, and the client can only pay once the order is in ACCEPTED
+ * status. This ensures no money is collected for orders the farmer has not
+ * reviewed.
  */
 export const initiatePayment = async (
   orderId: string,
@@ -64,6 +64,11 @@ export const initiatePayment = async (
     throw ApiError.badRequest("This order is already paid");
   if (order.orderStatus === "cancelled")
     throw ApiError.badRequest("This order has been cancelled and can no longer be paid");
+  // Enforce accept-first flow: payment is only available after the farmer approves.
+  if (order.orderStatus !== "accepted")
+    throw ApiError.badRequest(
+      "Payment is only available after the farmer accepts the order."
+    );
 
   const existingPaid = await Payment.exists({ orderId: order._id, status: "paid" });
   if (existingPaid) throw ApiError.badRequest("This order is already paid");
